@@ -1,0 +1,20 @@
+# Test coverage and evidence limits
+
+Backend tests in `tests/` drive authenticated routes and domain operations with isolated stores and controlled adapters. They cover session/origin enforcement, durable delivery and retries, approval receipts, entity revisions, calendar conflicts, OAuth/PKCE, private attachment handling, backup/restore and recovery.
+
+`test_memory_projection.py` and `test_memory_context.py` cover bounded snippets, revision-pinned detail reads, exact user text, receipt-proven legacy projection and malformed/mismatched references. `test_item_chat.py` and `test_item_chat_concurrency.py` cover per-item bindings, creation retries, fresh references and deletion. These use synthetic records.
+
+Shared IDE tests cover the compatibility protocol and fail-closed identity/version boundary. They must use explicitly configured synthetic thread identifiers. They do not authorize reading or operating a developer's personal conversation.
+
+Browser tests under `apps/web/tests/` load real components. Many use controlled route, speech or provider fixtures; these validate UI behavior, isolation and races. Live scenarios require a separately prepared test installation and may invoke models or change records/settings. The default Playwright configuration includes all files, so do not run the whole browser suite against a personal installation. Choose a feature-specific configuration or explicitly selected fixture files after reviewing their setup.
+
+Automated checks are distinct from actual provider and device acceptance. In particular, synthetic speech engines do not establish physical microphone/synthesis support; generated push events do not establish browser-closed delivery; fake calendar/OAuth responses do not establish a real account grant. Fresh-install runtime verification, exact deployed artifact identity and the full product acceptance contract remain separate gates.
+
+Useful starting commands:
+
+```sh
+.venv/bin/pytest -q
+npm run build --prefix apps/web
+```
+
+Consult the relevant subsystem contract and test file before running a live test. Keep captured private evidence outside Git and tie each deployment claim to the artifact actually observed.

@@ -1,0 +1,91 @@
+title = "Example substantive workstream"
+branch = "feature/example-workstream"
+baseline = "origin/main"
+root_dir = "../../.."
+phase_order = ["branch_setup", "implementation", "closeout"]
+
+# Add completion_ledger only when a separate completion log is useful.
+# Proposal-only slices should follow agent-protocols/proposal-protocol.md.
+# Run this manifest with:
+# python3 agent-protocols/scripts/check_gated_plan.py path/to/work.plan.toml --phase phase_name
+
+[phases.branch_setup]
+summary = "Create the dedicated branch and durable plan artifacts."
+
+[[phases.branch_setup.checks]]
+id = "protocol-doc-exists"
+type = "path_exists"
+path = "agent-protocols/substantive-work-protocol.md"
+
+[[phases.branch_setup.checks]]
+id = "plans-landing-page-exists"
+type = "path_exists"
+path = "docs/plans/README.md"
+
+[[phases.branch_setup.checks]]
+id = "plans-index-exists"
+type = "path_exists"
+path = "docs/plans/plans-index.md"
+
+[[phases.branch_setup.checks]]
+id = "branch-worktree-bound"
+type = "git_branch_worktree"
+repo = "."
+branch = "feature/example-workstream"
+current = true
+# Add `path = "/absolute/worktree/path"` when the exact checkout path matters.
+# Add `contains = "products/leam"` when runtime tooling needs that surface.
+
+[phases.implementation]
+summary = "Implement the active slice."
+depends_on = ["branch_setup"]
+
+[[phases.implementation.checks]]
+id = "targeted-tests"
+type = "command"
+command = "cargo test --test substantive_work_protocol -- --nocapture"
+
+[[phases.implementation.checks]]
+id = "repo-clean"
+type = "git_clean"
+repo = "."
+
+[[phases.implementation.checks]]
+id = "head-ahead-of-baseline"
+type = "git_head_ahead"
+repo = "."
+
+[[phases.implementation.checks]]
+id = "branch-worktree-bound"
+type = "git_branch_worktree"
+repo = "."
+current = true
+
+[[phases.implementation.checks]]
+id = "old-authoritative-surface-gone"
+type = "regex_absent"
+path = "some/file/or/doc.md"
+pattern = "old authoritative path"
+
+[phases.closeout]
+summary = "Refresh docs and confirm merge-and-clean readiness."
+depends_on = ["implementation"]
+
+# A real closeout phase should normally prove more than "tests still pass".
+# After promotion into main, prefer checks that confirm absorbed branches and
+# worktrees were removed or that their preservation was recorded deliberately.
+
+[[phases.closeout.checks]]
+id = "branch-name-matches-plan"
+type = "command"
+command = "git branch --show-current | grep -Fx feature/example-workstream"
+
+[[phases.closeout.checks]]
+id = "worktree-removed"
+type = "worktree_absent"
+path = "/tmp/example-workstream-worktree"
+
+[[phases.closeout.checks]]
+id = "live-status-ledger-exists"
+type = "path_exists"
+path = "docs/live-workstream-status.md"

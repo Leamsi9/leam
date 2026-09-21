@@ -1,0 +1,13 @@
+version = 1
+status_ledger_path = "docs/live-workstream-status.md"
+
+[[repos]]
+id = "my-repo"
+path = "."
+main_branch = "main"
+
+[[repos]]
+id = "workspace"
+path = "../my-workspace"
+path_base = "git_common_root"
+main_branch = "main"

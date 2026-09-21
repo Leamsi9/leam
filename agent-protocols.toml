@@ -1,0 +1,7 @@
+version = 1
+status_ledger_path = "docs/live-workstream-status.md"
+
+[[repos]]
+id = "leam"
+path = "."
+main_branch = "main"

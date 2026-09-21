@@ -1,0 +1,5 @@
+{
+  "provenance": "Sanitized envelope from installed extension 26.908.40401, read-only owner/snapshot round trip on 2026-09-20. Thread/client identities replaced; user content, paths, goal text and history removed. Actual observed frame was 7400415 bytes, stream version 11; root state field types preserved for the selected subset.",
+  "owner": {"type": "response", "requestId": "REQUEST", "resultType": "success", "method": "thread-owner-discovery", "handledByClientId": "owner-fixture", "result": {"supportsUntrustedAppInput": true}},
+  "snapshot": {"type": "broadcast", "method": "thread-stream-state-changed", "sourceClientId": "owner-fixture", "targetClientIds": ["reader-fixture"], "version": 11, "params": {"conversationId": "thread-fixture", "hostId": "local", "change": {"type": "snapshot", "revision": 1, "conversationState": {"id": "thread-fixture", "hostId": "local", "turns": [], "requests": [], "turnHistory": {}, "threadGoal": {}, "threadRuntimeStatus": {}, "latestModel": "gpt-6-astra", "latestReasoningEffort": null}}}}
+}
