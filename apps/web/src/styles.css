@@ -1454,3 +1454,61 @@ pre {
 .item-chat .companion-page.has-conversation { height: min(70dvh, 640px); min-height: 360px; width: 100%; padding: 8px 0; }
 .item-chat .companion-page .composer { position: static; flex: 0 0 auto; width: 100%; }
 .item-chat .companion-messages { overflow-y: auto; }
+
+/* The day is a working agenda; Goals holds management and longer context. */
+.agenda-heading,.agenda-section-heading,.agenda-date,.agenda-toolbar { display:flex; align-items:center; gap:12px; justify-content:space-between; flex-wrap:wrap; }
+.agenda-heading h1 { margin-bottom:4px; }
+.agenda-date { justify-content:flex-start; margin:20px 0 12px; }
+.agenda-date label { font-size:.8rem; display:grid; gap:4px; min-width:0; }
+.agenda-date input { max-width:165px; }
+.agenda-toolbar { justify-content:flex-start; margin-bottom:24px; }
+.daily-agenda > section { margin-top:24px; }
+.agenda-empty,.agenda-hint { color:var(--sub); font-size:.9rem; }
+.agenda-triage { display:flex; flex-wrap:wrap; gap:6px; padding:8px 0 16px; }
+.agenda-triage button { min-height:44px; font-size:.8rem; }
+.agenda-triage button[aria-pressed=true] { border-color:var(--green); background:#e9f2e7; color:#25472a; }
+.agenda-commitment > .card { margin-bottom:0; }
+.agenda-event > div:first-child { display:flex; gap:8px; align-items:center; }
+.agenda-event h3 { margin:10px 0; }
+.agenda-sources,.agenda-deferred,.agenda-notifications,.goals-controls { margin:16px 0; }
+.agenda-sources p,.goal-capacities p { overflow-wrap:anywhere; }
+.agenda-sources summary,.agenda-deferred summary,.agenda-notifications summary,.goals-controls summary { cursor:pointer; padding:12px 0; }
+.goal-capacities { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:12px; margin-top:16px; }
+.agenda-chat-dialog { width:min(900px,96vw); height:min(850px,92dvh); max-height:96dvh; padding:16px; border:1px solid var(--line); border-radius:16px; }
+.agenda-chat-dialog[open] { display:flex; flex-direction:column; }
+.agenda-chat-dialog > header { flex:none; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.agenda-chat-dialog h2 { margin:0 0 4px; }
+.agenda-chat-dialog .companion-page.has-conversation { flex:1; min-height:0; height:auto; padding:12px 0 0; width:100%; }
+.agenda-chat-dialog .composer { position:static; }
+.agenda-chat-dialog::backdrop { background:#16201bb3; }
+@media(max-width:600px) {
+  .agenda-chat-dialog { width:100%; max-width:100%; height:100dvh; max-height:100dvh; margin:0; border:0; border-radius:0; padding:12px; }
+  .mobile-navigation { grid-template-columns:repeat(5,minmax(0,1fr)); }
+  .sidebar nav.mobile-navigation button { min-width:0; padding-left:3px; padding-right:3px; }
+  .sidebar nav.mobile-navigation button span { font-size:.7rem; }
+  .agenda-heading { align-items:flex-start; }
+  .agenda-heading h1 { font-size:2rem; }
+}
+
+.agenda-hidden-calendars { margin: 16px 0; }
+.agenda-hidden-calendars > summary { cursor: pointer; padding: 12px 0; }
+.agenda-email, .agenda-event { min-width: 0; overflow-wrap: anywhere; }
+.calendar-visibility-action { margin-top: 8px; }
+
+/* Local daily priorities are distinct from the source inbox/schedule. */
+.agenda-focus { border: 2px solid var(--green); border-radius: 16px; padding: 16px; background: #f3f7ef; scroll-margin-top: 16px; overflow-wrap: anywhere; }
+.agenda-focus h2 { margin: 0; display: flex; align-items: center; gap: 10px; }
+.agenda-focus time { font-size: .85rem; color: var(--sub); }
+.agenda-focus-count { background: var(--green); color: white; min-width: 28px; height: 28px; display: inline-grid; place-items: center; border-radius: 50%; font-size: .9rem; }
+.agenda-focus-notice { padding: 10px 12px; background: white; border-radius: 8px; font-size: .9rem; }
+.agenda-focus .agenda-triage { padding-bottom: 8px; }
+.daily-agenda section:not(.agenda-focus) > .agenda-email p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media(max-width:600px) { .agenda-focus { padding: 12px; } }
+.agenda-section > summary { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 44px; list-style: none; }
+.agenda-section > summary::-webkit-details-marker { display: none; }
+.agenda-section > summary::before { content: '›'; font-size: 1.5rem; transform: rotate(0); }
+.agenda-section[open] > summary::before { transform: rotate(90deg); }
+.agenda-section > summary h2 { margin: 0; display: inline-flex; align-items: center; gap: 10px; }
+.agenda-section > summary h2 > span:not(.agenda-focus-count) { font-size: .85rem; color: var(--sub); font-weight: normal; }
+.agenda-section > summary time { margin-left: auto; }
+.agenda-section[open] > summary { margin-bottom: 12px; }

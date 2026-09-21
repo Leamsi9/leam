@@ -64,6 +64,15 @@ The existing original schema remains supported; restored state does not include
 Codex/IronClaw history or runtime permissions. Invalid or corrupted current state
 cannot bypass the required fresh safety backup.
 
+Archives made before email caching may omit `email_snapshots`; ordinary Store
+initialization creates the empty table on restored application startup. A present
+table must match the current exact schema. Each saved snapshot must decrypt with
+the installation account key and its `email-snapshot:<account ID>` label, and its
+cache envelope must contain at most 20 object items plus a boolean truncation flag.
+Additional snapshot/item metadata is preserved. Missing email cache never grants
+mailbox access or changes restored calendar/mail credentials. All other required
+tables and account/config vault checks remain enforced.
+
 An independent private JSON journal reserves request ID and full operation digest
 before side effects. Same ID/digest returns its receipt; changed payload conflicts.
 A cross-process lock prevents concurrent restore and normal deployment. The journal

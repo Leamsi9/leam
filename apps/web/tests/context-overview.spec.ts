@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 for (const width of [390, 1440])
-  test(`Today overview stays collapsed and reports sourced/stale build state at ${width}`, async ({
+  test(`Across Leam overview stays collapsed and reports sourced/stale build state at ${width}`, async ({
     page,
   }) => {
     page.on("pageerror", error => console.error(error));
@@ -65,13 +65,13 @@ for (const width of [390, 1440])
       }
       await route.fulfill({ json: data });
     });
-    await page.goto("/?view=today");
+    await page.goto("/?view=overview");
     const disclosure = page
       .locator("details")
       .filter({ has: page.locator("summary", { hasText: "Across Leam" }) });
     await expect(disclosure).not.toHaveAttribute("open", "");
     expect(calls).toBe(0);
-    await page.getByText("Across Leam", { exact: true }).click();
+    await disclosure.locator(":scope > summary").click();
     await expect(
       page.getByRole("heading", { name: "Leam build", exact: true }),
     ).toBeVisible();

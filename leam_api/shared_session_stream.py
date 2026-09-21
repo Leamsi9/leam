@@ -86,7 +86,9 @@ class PrivateIdeStream(PrivateIdeReader):
         Frames remain at most 32MiB; lifetime budgets are 10000 frames/256MiB.
         No automatic reconnect, takeover, or command dispatch occurs here.
         """
-        async with self._connection(thread_id, lifetime=300) as connection:
+        async with self._connection(
+            thread_id, lifetime=300, renewable=True
+        ) as connection:
             connection.max_messages = 10000
             connection.max_total = 256 * 1024 * 1024
             owner = await asyncio.wait_for(connection.owner(thread_id), 8)
@@ -231,6 +233,14 @@ def project_snapshot(snapshot: SessionSnapshot) -> dict:
                 public["text"] = text
             else:
                 public["content"] = [{"type": "text", "text": text}]
+                correlation = (
+                    "clientUserMessageId"
+                    if kind == "steeringUserMessage"
+                    else "clientId"
+                )
+                value = item.get(correlation)
+                if isinstance(value, str) and 0 < len(value) <= 256:
+                    public[correlation] = value
                 if kind == "steeringUserMessage":
                     public["deliveryStatus"] = item.get("status")
             items.append(public)

@@ -21,9 +21,12 @@ export function pwaShell(): Plugin {
       const index = await readFile(resolve(out, "index.html"), "utf8");
       const files = [
         "/",
-        "/icon.svg",
-        "/icon-192.png",
-        "/icon-512.png",
+        "/leam-icon-192.png",
+        "/leam-icon-512.png",
+        "/leam-maskable-512.png",
+        "/apple-touch-icon.png",
+        "/favicon-32.png",
+        "/favicon.ico",
         "/manifest.webmanifest",
         ...Object.keys(bundle)
           .filter(

@@ -26,7 +26,10 @@ from .backlog import Backlog
 from .backlog import router as backlog_router
 from .backups import Backups
 from .backups import router as backups_router
+from .email import Emails
+from .email import router as email_router
 from .calendar import Calendars
+from .agenda import Agenda, router as agenda_router
 from .calendar import router as calendar_router
 from .calendar_actions import CalendarActions
 from .calendar_actions import router as calendar_actions_router
@@ -95,6 +98,7 @@ class Turn(StrictModel):
     generation: str | None = Field(default=None, max_length=128)
     text: str = Field(min_length=0, max_length=100000)
     requestId: str = Field(min_length=8, max_length=100)
+    expectedTurnId: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class NewThread(StrictModel):
@@ -104,6 +108,7 @@ class NewThread(StrictModel):
 class Reconcile(StrictModel):
     attachmentIds: list[str] = Field(default_factory=list, max_length=10)
     text: str = Field(min_length=0, max_length=100000)
+    expectedTurnId: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 def create_app(
@@ -203,9 +208,15 @@ def create_app(
         permission_profiles_router(PermissionProfiles(store, permissions, inspector))
     )
     app.include_router(tool_permissions_router(permissions))
-    app.include_router(companion_router(store, runtime, bridge, inspector))
+    emails = Emails(store, accounts)
+    agenda = Agenda(store, runtime, emails=emails)
+    app.state.agenda = agenda
+    app.include_router(
+        companion_router(store, runtime, bridge, inspector, agenda=agenda)
+    )
     app.include_router(commitments_router(store))
     app.include_router(item_chat_router(ItemChats(store, runtime)))
+    app.include_router(agenda_router(agenda))
     app.include_router(remember_router(store))
     app.include_router(reminders_router(scheduler))
     app.state.scheduler = scheduler
@@ -217,6 +228,8 @@ def create_app(
     app.include_router(push_router(push))
     app.state.accounts = accounts
     app.include_router(accounts_router(accounts))
+    app.state.emails = emails
+    app.include_router(email_router(emails))
     calendars = Calendars(store, accounts)
     calendar_actions = CalendarActions(calendars)
     app.include_router(calendar_actions_router(calendar_actions))
@@ -430,6 +443,13 @@ def create_app(
         response.delete_cookie("leam_session")
         return response
 
+    @app.get("/api/codex/shared-thread")
+    async def shared_thread_metadata():
+        # The IDE-owned session remains discoverable even while the independent
+        # native App Server catalog is slow or unavailable. No IPC starts here.
+        thread = shared.listing()
+        return {"configured": thread is not None, "thread": thread}
+
     @app.get("/api/codex/threads")
     async def threads(
         cursor: str | None = Query(default=None, max_length=4096),
@@ -572,9 +592,11 @@ def create_app(
             refs = attachments.resolve(body.attachmentIds)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
-        fingerprint = hashlib.sha256(
-            json.dumps([thread_id, body.text] + ([refs] if refs else [])).encode()
-        ).hexdigest()
+        from .codex_submissions import fingerprint as submission_fingerprint
+
+        fingerprint = submission_fingerprint(
+            thread_id, body.text, refs, body.expectedTurnId
+        )
         async with locks[thread_id]:
             with store.connect() as db:
                 row = db.execute(
@@ -599,12 +621,19 @@ def create_app(
                     params["cursor"] = cursor
                 page = await bridge.request("thread/turns/list", params)
                 for turn in page.get("data", []):
+                    if (
+                        body.expectedTurnId is not None
+                        and turn.get("id") != body.expectedTurnId
+                    ):
+                        continue
                     if any(
                         item.get("type") == "userMessage"
                         and item.get("clientId") == request_id
                         for item in turn.get("items", [])
                     ):
                         result = {"turn": turn}
+                        if body.expectedTurnId is not None:
+                            result["operation"] = "steer"
                         store.finish(request_id, result)
                         return {"state": "complete", "result": result}
                 cursor = page.get("nextCursor")
@@ -692,6 +721,10 @@ def create_app(
         if not body.text.strip() and not body.attachmentIds:
             raise HTTPException(422, "A message or attachment is required")
         if shared.owns(thread_id):
+            if body.expectedTurnId is not None:
+                raise HTTPException(
+                    422, "Shared Coding uses its owner-bound submission path"
+                )
             return await shared.send(
                 body.text, body.requestId, body.generation, body.attachmentIds
             )
@@ -699,9 +732,11 @@ def create_app(
             refs = attachments.resolve(body.attachmentIds)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
-        fingerprint = hashlib.sha256(
-            json.dumps([thread_id, body.text] + ([refs] if refs else [])).encode()
-        ).hexdigest()
+        from .codex_submissions import fingerprint as submission_fingerprint
+
+        fingerprint = submission_fingerprint(
+            thread_id, body.text, refs, body.expectedTurnId
+        )
         async with locks[thread_id]:
             try:
                 existing = store.receipt(body.requestId, fingerprint)
@@ -740,24 +775,51 @@ def create_app(
                 raise HTTPException(409, str(error)) from error
             if existing is not None:
                 return existing
+            params = {
+                "threadId": thread_id,
+                "clientUserMessageId": body.requestId,
+                "additionalContext": policy_context,
+                "input": [
+                    {"type": "text", "text": body.text, "text_elements": []},
+                    *extra_input,
+                ],
+            }
+            if body.expectedTurnId is not None:
+                params["expectedTurnId"] = body.expectedTurnId
             try:
                 result = await bridge.request(
-                    "turn/start",
-                    {
-                        "threadId": thread_id,
-                        "clientUserMessageId": body.requestId,
-                        "additionalContext": policy_context,
-                        "input": [
-                            {"type": "text", "text": body.text, "text_elements": []},
-                            *extra_input,
-                        ],
-                    },
+                    "turn/steer" if body.expectedTurnId is not None else "turn/start",
+                    params,
                     expected_generation=generation,
                 )
             except CodexGenerationError as error:
                 store.release_unsent(body.requestId, fingerprint)
                 bindings.pop(thread_id, None)
                 raise HTTPException(409, str(error)) from error
+            except CodexError as error:
+                # JSON-RPC invalid request/method/parameters are definitive
+                # admission rejections. Transport/internal errors stay uncertain.
+                if body.expectedTurnId is not None and error.rpc_code in {
+                    -32600,
+                    -32601,
+                    -32602,
+                }:
+                    store.release_unsent(body.requestId, fingerprint)
+                    raise HTTPException(
+                        409,
+                        "Follow-up was not accepted. Refresh the conversation and send your saved draft again.",
+                        headers={"X-Leam-Action-Reserved": "no"},
+                    ) from error
+                raise
+            if body.expectedTurnId is not None:
+                if result.get("turnId") != body.expectedTurnId:
+                    raise CodexError(
+                        "No matching steering receipt; reconcile before retrying"
+                    )
+                result = {
+                    "turn": {"id": result["turnId"], "status": "inProgress"},
+                    "operation": "steer",
+                }
             store.finish(body.requestId, result)
             return result
 

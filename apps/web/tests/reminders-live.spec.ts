@@ -12,7 +12,7 @@ test("a reminder becomes ready with the browser closed and completes from Today"
     .fill("local-browser-acceptance-only");
   await page.getByRole("button", { name: /Enter Leam/ }).click();
   await page.getByRole("button", { name: "Today", exact: true }).click();
-  await page.getByRole("button", { name: "Plan a commitment" }).click();
+  await page.getByRole("button", { name: "Add commitment" }).click();
   const title = "Durable reminder " + Date.now();
   await page.getByLabel("Commitment title", { exact: true }).fill(title);
   await page.getByLabel("Kind", { exact: true }).selectOption("habit");
@@ -32,6 +32,7 @@ test("a reminder becomes ready with the browser closed and completes from Today"
   await next.setViewportSize({ width: 390, height: 844 });
   await next.goto("/");
   await next.getByRole("button", { name: "Today", exact: true }).click();
+  await next.locator(".agenda-notifications > summary").click();
   const reminder = next
     .locator(".reminder-card")
     .filter({ has: next.getByRole("heading", { name: title, exact: true }) });
@@ -40,6 +41,7 @@ test("a reminder becomes ready with the browser closed and completes from Today"
     .getByRole("button", { name: "Mark done", exact: true })
     .click();
   await expect(reminder).toHaveCount(0);
+  await next.locator(".agenda-completed > summary").click();
   await expect(
     next.getByRole("button", { name: "Reopen " + title, exact: true }),
   ).toBeVisible();

@@ -15,3 +15,6 @@
 - [Runtime lock](architecture/runtime-lock.json): upstream and patched public source identities; each installation records and verifies its own build artifact.
 
 Private installation plans, live transcripts and deployment evidence are not included. Future engineering plans belong under `docs/plans/` and follow the pinned protocols.
+
+- [Daily agenda](architecture/agenda-contract.md): saved calendar/commitment/mail sources, freshness, focused local choices, persistent exact-event visibility and day-bound Companion context.
+- [Application artwork](../apps/web/brand/README.md): source artwork adaptation and generated icon sizes.

@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from .attachments import AttachmentStore
 from .coding_policy import CodingPolicyError, coding_context
 from .shared_decisions import SharedDecisions
-from .shared_session import SharedSessionError
+from .shared_session import SharedSessionError, SharedSessionRenewal
 from .shared_session_commands import PrivateIdeCommands, SubmissionUncertain
 from .shared_session_stream import PrivateIdeStream, project_snapshot
 
@@ -92,6 +92,7 @@ class SharedCoding:
         # Renew only a read subscription. Never resume, take ownership or replay.
         while True:
             generator = self.stream.watch(self.thread_id)
+            renewal = False
             try:
                 async for snapshot in generator:
                     if self.snapshot and snapshot.owner != self.snapshot.owner:
@@ -104,16 +105,21 @@ class SharedCoding:
                     self.notify()
             except asyncio.CancelledError:
                 raise
+            except SharedSessionRenewal:
+                renewal = True
+                self.error = None
             except (SharedSessionError, OSError, ValueError, TypeError):
                 self.error = "Shared Codex connection is unavailable. Keep the original Codex window open and reconnect."
             finally:
                 await generator.aclose()
                 self.connected = False
-                self.generation = str(uuid.uuid4())
+                if not renewal:
+                    self.generation = str(uuid.uuid4())
                 self.ready.set()
                 self.notify()
             # Bounded retry interval; all renewals revalidate disk pins/socket/owner.
-            await asyncio.sleep(5)
+            if not renewal:
+                await asyncio.sleep(5)
 
     async def ensure(self):
         if self.thread_id is None:

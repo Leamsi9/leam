@@ -70,6 +70,9 @@ def test_account_authorization_is_bound_single_use_and_secret_material_is_encryp
         ).json()
         params = parse_qs(urlsplit(started["url"]).query)
         assert params["code_challenge_method"] == ["S256"]
+        assert params["prompt"] == [
+            "select_account consent" if provider == "google" else "select_account"
+        ]
         assert "private-app-secret" not in started["url"]
         state = params["state"][0]
         callback = (

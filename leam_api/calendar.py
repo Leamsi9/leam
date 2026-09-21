@@ -68,7 +68,9 @@ def event_record(provider, item):
     if all_day:
         date.fromisoformat(start)
         date.fromisoformat(end)
-    if start >= end:
+    # Providers can return timed point events. Preserve their instant without
+    # inventing duration; all-day dates still require an exclusive later end.
+    if start > end or (all_day and start == end):
         raise ValueError("Invalid event date range")
     if not isinstance(link, str) or urlsplit(link).scheme != "https":
         link = None

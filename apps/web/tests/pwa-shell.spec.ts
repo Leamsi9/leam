@@ -170,6 +170,14 @@ test("install prompt appears only after an explicit Settings action", async ({
   await page.getByRole("button", { name: "Install Leam", exact: true }).click();
   expect(await page.evaluate(() => (window as any).installPrompts)).toBe(1);
   await expect(
-    page.getByRole("button", { name: "Install Leam", exact: true }),
+    page.getByText("Installation dismissed.", { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Install Leam", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Installation instructions" }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => (window as any).installPrompts)).toBe(1);
+  await expect(
+    page.getByText("Leam is installed.", { exact: false }),
   ).toHaveCount(0);
 });

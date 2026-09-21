@@ -7,13 +7,18 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useChatScroll } from "./chat-scroll";
-import { api, type Data } from "./api";
+import { api, ApiError, type Data } from "./api";
 import { VoiceComposer } from "./voice/composer";
 import { ReadAloud } from "./voice/controls";
 import { stopRecognition } from "./voice/speech";
 import { stopConversation, type Receipt } from "./voice/conversation";
 
-type Pending = { id: string; text: string; attachmentIds?: string[] };
+type Pending = {
+  id: string;
+  text: string;
+  attachmentIds?: string[];
+  expectedTurnId?: string;
+};
 
 function savedPending(key: string): Pending | null {
   try {
@@ -24,6 +29,9 @@ function savedPending(key: string): Pending | null {
       ? {
           id: value.id,
           text: value.text,
+          ...(typeof value.expectedTurnId === "string"
+            ? { expectedTurnId: value.expectedTurnId }
+            : {}),
           attachmentIds: Array.isArray(value.attachmentIds)
             ? value.attachmentIds
             : [],
@@ -259,20 +267,20 @@ function TicketConversation({ ticket }: { ticket: Data }) {
       if (timer) clearTimeout(timer);
     };
   }, [thread?.threadId]);
-  const active =
-    turns.some((turn) => turn.status === "inProgress") ||
-    !!(
-      acceptedRun &&
-      !turns.some(
-        (turn) =>
-          turn.id === acceptedRun &&
-          ["completed", "failed", "interrupted"].includes(turn.status),
-      )
-    );
+  const activeTurnId =
+    turns.find((turn) => turn.status === "inProgress")?.id ||
+    (acceptedRun &&
+    !turns.some(
+      (turn) =>
+        turn.id === acceptedRun &&
+        ["completed", "failed", "interrupted"].includes(turn.status),
+    )
+      ? acceptedRun
+      : undefined);
 
   async function submitText(raw: string): Promise<Receipt> {
-    if (sending.current || active || uploading)
-      throw new Error("Wait for the current ticket reply.");
+    if (sending.current || uploading)
+      throw new Error("Wait for the current message delivery or upload.");
     if (!raw.trim() && !files.ids.length)
       throw new Error("Write a message or attach a file first.");
     sending.current = true;
@@ -285,6 +293,7 @@ function TicketConversation({ ticket }: { ticket: Data }) {
         id: crypto.randomUUID(),
         text: raw,
         attachmentIds: files.ids,
+        ...(activeTurnId ? { expectedTurnId: activeTurnId } : {}),
       };
       if (attempt.text !== raw)
         throw new Error(
@@ -313,6 +322,9 @@ function TicketConversation({ ticket }: { ticket: Data }) {
           "POST",
           {
             text: attempt.text,
+            ...(attempt.expectedTurnId
+              ? { expectedTurnId: attempt.expectedTurnId }
+              : {}),
             ...(attempt.attachmentIds?.length
               ? { attachmentIds: attempt.attachmentIds }
               : {}),
@@ -334,6 +346,9 @@ function TicketConversation({ ticket }: { ticket: Data }) {
           {
             text: attempt.text,
             requestId: attempt.id,
+            ...(attempt.expectedTurnId
+              ? { expectedTurnId: attempt.expectedTurnId }
+              : {}),
             ...(attempt.attachmentIds?.length
               ? { attachmentIds: attempt.attachmentIds }
               : {}),
@@ -363,6 +378,22 @@ function TicketConversation({ ticket }: { ticket: Data }) {
       }
       return { outcome: "submitted", run_id: result.turn.id, autoReply: true };
     } catch (value) {
+      if (value instanceof ApiError && value.actionReserved === "no") {
+        // An explicit admission rejection is safe to leave as an editable draft.
+        // Unknown transport outcomes retain their original target and receipt.
+        const rejected = pending.current;
+        if (rejected && savedPending(pendingKey)?.id === rejected.id)
+          sessionStorage.removeItem(pendingKey);
+        const id = current.current?.threadId;
+        if (id && savedPending("leam-submission:" + id)?.id === rejected?.id)
+          sessionStorage.removeItem("leam-submission:" + id);
+        pending.current = null;
+        if (mounted.current) {
+          setAcceptedRun("");
+          setPendingRevision((revision) => revision + 1);
+          if (id) void refresh(id).catch(report);
+        }
+      }
       report(value);
       throw value;
     } finally {
@@ -418,17 +449,17 @@ function TicketConversation({ ticket }: { ticket: Data }) {
                       className="message assistant"
                     >
                       <strong>Codex</strong>
-                    {item.text?.trim() && thread?.threadId && (
-                      <ReadAloud
-                        text={item.text}
-                        final={turn.status === "completed"}
-                        target={{
-                          module: "coding",
-                          threadId: thread.threadId,
-                          runId: turn.id,
-                          messageId: item.id,
-                        }}
-                      />
+                      {item.text?.trim() && thread?.threadId && (
+                        <ReadAloud
+                          text={item.text}
+                          final={turn.status === "completed"}
+                          target={{
+                            module: "coding",
+                            threadId: thread.threadId,
+                            runId: turn.id,
+                            messageId: item.id,
+                          }}
+                        />
                       )}
                       <div className="prose markdown">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -459,7 +490,9 @@ function TicketConversation({ ticket }: { ticket: Data }) {
           session to respond; no permission has been granted here.
         </p>
       )}
-      {active && <p role="status">Codex is working…</p>}
+      {activeTurnId && (
+        <p role="status">Codex is working… You can send a follow-up.</p>
+      )}
       {thread?.threadId && (
         <>
           <details>
@@ -486,7 +519,7 @@ function TicketConversation({ ticket }: { ticket: Data }) {
           <button
             type="button"
             className="secondary"
-            disabled={loading || active}
+            disabled={loading}
             onClick={() => {
               const saved = savedPending(pendingKey);
               if (saved) void submitText(saved.text).catch(() => {});
@@ -535,7 +568,6 @@ function TicketConversation({ ticket }: { ticket: Data }) {
             loading ||
             busy ||
             uploading ||
-            active ||
             !!pending.current ||
             thread?.state === "uncertain"
           }
@@ -576,7 +608,6 @@ function TicketConversation({ ticket }: { ticket: Data }) {
             loading ||
             busy ||
             uploading ||
-            active ||
             (!text.trim() && !files.ids.length) ||
             thread?.state === "uncertain"
           }

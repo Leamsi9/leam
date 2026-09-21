@@ -29,3 +29,7 @@ client_secret*.json
 *.p12
 *.pfx
 *.log
+
+# Local dependency links as well as directories.
+.venv
+node_modules

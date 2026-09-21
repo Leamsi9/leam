@@ -72,7 +72,7 @@ test("native commitment dialog contains focus, closes with Escape/top Close and 
 }) => {
   await fixture(page);
   await page.setViewportSize({ width: 360, height: 740 });
-  await page.goto("/?view=today");
+  await page.goto("/?view=goals");
   const opener = page.getByRole("button", {
     name: "Plan a commitment",
     exact: true,
@@ -110,7 +110,7 @@ test("saving commitment cannot be dismissed or double-submitted; failed save kee
   const f = await fixture(page);
   f.hold();
   f.reject();
-  await page.goto("/?view=today");
+  await page.goto("/?view=goals");
   await page
     .getByRole("button", { name: "Plan a commitment", exact: true })
     .click();

@@ -46,10 +46,11 @@ test("a delayed progress save refreshes the currently selected day", async ({
     await route.fulfill({ json: body });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Today", exact: true }).click();
+  await page.getByRole("button", { name: "Goals", exact: true }).click();
   await page.getByRole("spinbutton", { name: "Progress for Walk" }).fill("8");
   await page.getByRole("button", { name: "Save progress" }).click();
   await started;
+  await page.getByText("Progress date and filters", { exact: true }).click();
   await page.getByLabel("Viewing date").fill("2026-09-21");
   await expect(
     page.getByRole("spinbutton", { name: "Progress for Walk" }),
@@ -94,10 +95,11 @@ test("quick-add completion keeps the currently selected date", async ({
     await route.fulfill({ json: body });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Today", exact: true }).click();
+  await page.getByRole("button", { name: "Goals", exact: true }).click();
   await page.getByRole("textbox", { name: "New commitment" }).fill("New task");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await started;
+  await page.getByText("Progress date and filters", { exact: true }).click();
   await page.getByLabel("Viewing date").fill("2026-09-21");
   await expect.poll(() => dates.at(-1)).toBe("2026-09-21");
   const before = dates.length;

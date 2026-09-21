@@ -19,6 +19,9 @@ from pydantic import Field
 from .commitments import Input
 from .vault import Vault
 
+GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+EMAIL_SCOPE = "openid email " + GMAIL_READONLY
+
 Provider = Literal["google", "microsoft"]
 PROVIDERS = {
     "google": {
@@ -113,14 +116,43 @@ class Accounts:
                     "SELECT id,provider,identity,state,error,checked AS checkedAt,created FROM accounts ORDER BY created"
                 )
             ]
+        for account in accounts:
+            account["email"] = self.email_access(account["id"])
         return {"providers": providers, "items": accounts}
+
+    def email_access(self, account_id):
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT provider,body FROM accounts WHERE id=?", (account_id,)
+            ).fetchone()
+        if not row:
+            raise HTTPException(404, "Account not found")
+        saved = self.vault.open("account:" + account_id, row["body"])
+        mail = saved.get("email") or {}
+        granted = GMAIL_READONLY in str(mail.get("token", {}).get("scope", "")).split()
+        config = self.configuration(row["provider"])
+        valid_client = bool(config and config["clientId"] == saved["clientId"])
+        return {
+            "supported": row["provider"] == "google",
+            "granted": granted,
+            "state": (mail.get("state", "connected") if valid_client else "reconnect")
+            if granted
+            else "not_connected",
+        }
+
+    async def start_email(self, account_id, origin, session):
+        if self.provider_of(account_id) != "google":
+            raise HTTPException(
+                422, "Read-only email is currently available for Google accounts"
+            )
+        return await self.start("google", origin, session, email_account=account_id)
 
     def client(self, provider, config, **kwargs):
         return AsyncOAuth2Client(
             config["clientId"],
             config["clientSecret"],
             token_endpoint_auth_method="client_secret_post",
-            scope=PROVIDERS[provider]["scope"],
+            scope=kwargs.pop("scope", PROVIDERS[provider]["scope"]),
             code_challenge_method="S256",
             transport=self.transport,
             trust_env=False,
@@ -129,19 +161,39 @@ class Accounts:
             **kwargs,
         )
 
-    async def start(self, provider, origin, session):
+    async def start(self, provider, origin, session, *, email_account=None):
         if origin not in self.origins:
             raise HTTPException(403, "Use this Leam installation to connect accounts")
         config = self.configuration(provider)
         if not config:
             raise HTTPException(409, "Configure this OAuth application first")
+        email_identity = None
+        if email_account:
+            with self.store.connect() as db:
+                target = db.execute(
+                    "SELECT identity,body FROM accounts WHERE id=? AND provider='google'",
+                    (email_account,),
+                ).fetchone()
+            if not target:
+                raise HTTPException(404, "Account not found")
+            saved = self.vault.open("account:" + email_account, target["body"])
+            if saved["clientId"] != config["clientId"]:
+                raise HTTPException(409, "Reconnect the account before enabling email")
+            email_identity = target["identity"]
+        scope = EMAIL_SCOPE if email_account else PROVIDERS[provider]["scope"]
         state = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(48)
         redirect = origin + "/api/accounts/oauth/" + provider + "/callback"
         key = digest(state)
         sealed = self.vault.seal(
             "oauth:" + key,
-            {"verifier": verifier, "redirect": redirect, "config": config},
+            {
+                "verifier": verifier,
+                "redirect": redirect,
+                "config": config,
+                "scope": scope,
+                "emailAccount": email_account,
+            },
         )
         with self.store.connect() as db:
             db.execute("DELETE FROM oauth_states WHERE expires<=?", (self.clock(),))
@@ -149,12 +201,16 @@ class Accounts:
                 "INSERT INTO oauth_states VALUES (?,?,?,?,?)",
                 (key, provider, digest(session), self.clock() + 600, sealed),
             )
-        async with self.client(provider, config, redirect_uri=redirect) as client:
+        async with self.client(
+            provider, config, redirect_uri=redirect, scope=scope
+        ) as client:
             extra = (
-                {"access_type": "offline", "prompt": "consent"}
+                {"access_type": "offline", "prompt": "select_account consent"}
                 if provider == "google"
                 else {"prompt": "select_account", "response_mode": "query"}
             )
+            if email_account:
+                extra.update(include_granted_scopes="true", login_hint=email_identity)
             url, _ = client.create_authorization_url(
                 PROVIDERS[provider]["authorize"],
                 state=state,
@@ -187,7 +243,10 @@ class Accounts:
             return "/?view=settings&account=cancelled"
         try:
             async with self.client(
-                provider, data["config"], redirect_uri=data["redirect"]
+                provider,
+                data["config"],
+                redirect_uri=data["redirect"],
+                scope=data.get("scope", PROVIDERS[provider]["scope"]),
             ) as client:
                 token = await client.fetch_token(
                     PROVIDERS[provider]["token"],
@@ -212,6 +271,15 @@ class Accounts:
             ):
                 raise ValueError("Provider identity missing")
             account_id = str(uuid.uuid5(uuid.NAMESPACE_URL, provider + ":" + subject))
+            if data.get("emailAccount") and data["emailAccount"] != account_id:
+                raise HTTPException(
+                    409, "Choose the same Google account when enabling email"
+                )
+            if (
+                data.get("emailAccount")
+                and GMAIL_READONLY not in str(token.get("scope", "")).split()
+            ):
+                return "/?view=settings&account=email-denied"
             label = "account:" + account_id
             with self.store.connect() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -237,14 +305,41 @@ class Accounts:
                 previous = db.execute(
                     "SELECT body FROM accounts WHERE id=?", (account_id,)
                 ).fetchone()
-                if not token.get("refresh_token") and previous:
-                    old = self.vault.open(label, previous["body"])
-                    if old["clientId"] == data["config"]["clientId"]:
-                        token["refresh_token"] = old["token"].get("refresh_token")
-                body = self.vault.seal(
-                    label,
-                    {"clientId": data["config"]["clientId"], "token": dict(token)},
-                )
+                old = self.vault.open(label, previous["body"]) if previous else {}
+                same_client = old.get("clientId") == data["config"]["clientId"]
+                if data.get("emailAccount"):
+                    if not previous or not same_client:
+                        raise HTTPException(409, "Account changed; connect email again")
+                    previous_mail = old.get("email") or {}
+                    previous_token = previous_mail.get("token") or {}
+                    if (
+                        not token.get("refresh_token")
+                        and previous_mail.get("state") == "connected"
+                        and GMAIL_READONLY
+                        in str(previous_token.get("scope", "")).split()
+                    ):
+                        token["refresh_token"] = previous_token.get("refresh_token")
+                    if not token.get("refresh_token"):
+                        raise HTTPException(
+                            409,
+                            "Google did not grant renewable email access; enable email again",
+                        )
+                    old["email"] = {
+                        "token": dict(token),
+                        "state": "connected",
+                        "grantId": str(uuid.uuid4()),
+                    }
+                    db.execute(
+                        "UPDATE accounts SET body=? WHERE id=?",
+                        (self.vault.seal(label, old), account_id),
+                    )
+                    return "/?view=settings&account=email-connected"
+                if not token.get("refresh_token") and same_client:
+                    token["refresh_token"] = old["token"].get("refresh_token")
+                saved = {"clientId": data["config"]["clientId"], "token": dict(token)}
+                if same_client and old.get("email"):
+                    saved["email"] = old["email"]
+                body = self.vault.seal(label, saved)
                 db.execute(
                     """INSERT INTO accounts VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                     identity=excluded.identity,body=excluded.body,state=excluded.state,error=NULL,checked=excluded.checked""",
@@ -280,7 +375,14 @@ class Accounts:
         return row["provider"]
 
     async def authorized(
-        self, account_id, method, path, *, accepted_statuses=frozenset(), **kwargs
+        self,
+        account_id,
+        method,
+        path,
+        *,
+        accepted_statuses=frozenset(),
+        capability=None,
+        **kwargs,
     ):
         # Serialize credential rotation, reconnect, removal and refresh within a provider.
         async with self.locks[self.provider_of(account_id)]:
@@ -293,7 +395,11 @@ class Accounts:
             provider = row["provider"]
             url = urlsplit(path)
             hosts = (
-                {"www.googleapis.com", "openidconnect.googleapis.com"}
+                {
+                    "www.googleapis.com",
+                    "openidconnect.googleapis.com",
+                    "gmail.googleapis.com",
+                }
                 if provider == "google"
                 else {"graph.microsoft.com"}
             )
@@ -311,12 +417,43 @@ class Accounts:
             if (
                 not config
                 or config["clientId"] != saved["clientId"]
-                or row["state"] == "reconnect"
+                or (row["state"] == "reconnect" and capability != "email")
             ):
                 raise HTTPException(409, "Reconnect this account in Settings")
-            token = saved["token"]
+            mail = saved.get("email") or {}
+            if capability == "email":
+                if (
+                    provider != "google"
+                    or method != "GET"
+                    or url.hostname != "gmail.googleapis.com"
+                    or not url.path.startswith("/gmail/v1/users/me/messages")
+                ):
+                    raise HTTPException(
+                        400, "Email access only supports reading Gmail messages"
+                    )
+                if (
+                    GMAIL_READONLY
+                    not in str(mail.get("token", {}).get("scope", "")).split()
+                    or mail.get("state") == "reconnect"
+                ):
+                    raise HTTPException(409, "Enable read-only email in Settings")
+            elif url.hostname == "gmail.googleapis.com":
+                raise HTTPException(
+                    400, "Gmail requires explicit read-only email access"
+                )
+            token = mail["token"] if capability == "email" else saved["token"]
             try:
-                async with self.client(provider, config, token=token) as client:
+                async with self.client(
+                    provider,
+                    config,
+                    token=token,
+                    scope=token.get(
+                        "scope",
+                        EMAIL_SCOPE
+                        if capability == "email"
+                        else PROVIDERS[provider]["scope"],
+                    ),
+                ) as client:
                     if token.get("expires_at", 0) <= self.clock() + 60:
                         if not token.get("refresh_token"):
                             raise ValueError("Refresh token unavailable")
@@ -324,11 +461,20 @@ class Accounts:
                             PROVIDERS[provider]["token"],
                             refresh_token=token["refresh_token"],
                         )
+                        old_token = token
                         token = dict(refreshed)
-                        token.setdefault(
-                            "refresh_token", saved["token"]["refresh_token"]
-                        )
-                        saved["token"] = token
+                        token.setdefault("refresh_token", old_token["refresh_token"])
+                        if "scope" in old_token:
+                            token.setdefault("scope", old_token["scope"])
+                        if capability == "email":
+                            if (
+                                GMAIL_READONLY
+                                not in str(token.get("scope", "")).split()
+                            ):
+                                raise ValueError("Email scope no longer granted")
+                            mail["token"] = token
+                        else:
+                            saved["token"] = token
                         with self.store.connect() as db:
                             db.execute(
                                 "UPDATE accounts SET body=? WHERE id=?",
@@ -347,20 +493,31 @@ class Accounts:
                         raise HTTPException(
                             502, "Account provider HTTP " + str(response.status_code)
                         )
-                    with self.store.connect() as db:
-                        db.execute(
-                            "UPDATE accounts SET checked=?,error=NULL,state='connected' WHERE id=?",
-                            (self.clock(), account_id),
-                        )
+                    if capability != "email":
+                        with self.store.connect() as db:
+                            db.execute(
+                                "UPDATE accounts SET checked=?,error=NULL,state='connected' WHERE id=?",
+                                (self.clock(), account_id),
+                            )
                     return response
             except HTTPException:
                 raise
             except (OAuthError, ValueError):
                 with self.store.connect() as db:
-                    db.execute(
-                        "UPDATE accounts SET state='reconnect',error='Reconnect to renew account access' WHERE id=?",
-                        (account_id,),
-                    )
+                    if capability == "email":
+                        mail["state"] = "reconnect"
+                        db.execute(
+                            "UPDATE accounts SET body=? WHERE id=?",
+                            (
+                                self.vault.seal("account:" + account_id, saved),
+                                account_id,
+                            ),
+                        )
+                    else:
+                        db.execute(
+                            "UPDATE accounts SET state='reconnect',error='Reconnect to renew account access' WHERE id=?",
+                            (account_id,),
+                        )
                 raise HTTPException(409, "Reconnect to renew account access") from None
             except Exception:
                 raise HTTPException(
@@ -417,6 +574,12 @@ def router(accounts):
         response = RedirectResponse(location, status_code=303)
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
+
+    @routes.post("/{key}/email/authorize")
+    async def authorize_email(key: str, request: Request):
+        return await accounts.start_email(
+            key, request.headers.get("origin"), request.cookies.get("leam_session", "")
+        )
 
     @routes.post("/{key}/verify")
     async def verify(key: str):

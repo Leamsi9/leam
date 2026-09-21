@@ -150,9 +150,13 @@ canonical latest-window resolution, text bounds and confirmed steering deduplica
 
 ## Leam API and mobile integration
 
-`SharedCoding` owns exactly the original build thread and maintains one lazy
+`SharedCoding` owns exactly the configured IDE-owner thread and maintains one lazy
 background follower for all browser clients. Renewals revalidate the installed
-pins and owner; disconnect invalidates the binding and reports stale read state.
+pins and owner. Genuine disconnects invalidate the binding, report stale read state,
+and retry with a five-second backoff. The intentional five-minute read lease renews
+immediately without reporting an outage or invalidating an unchanged owner binding.
+Commands remain unavailable until the renewed subscription validates its owner; an
+owner change still invalidates the generation. The last transcript remains readable.
 Each send requires the generation returned by thread/read, rechecks it after policy
 validation, then the command adapter rediscovers the owner immediately before send.
 Other coding threads remain on the existing Codex subprocess path. The shared
@@ -199,3 +203,8 @@ approval policy or remove the adapter's socket, pin, peer and owner checks.
 Deployers preserving an existing shared session must configure its private binding
 before rolling out this revision. No automatic discovery or fallback to an operator's
 former thread is performed. Tests use a synthetic UUID and temporary Unix sockets.
+
+The bounded browser projection preserves exact input correlation as `clientId` for
+confirmed user messages and `clientUserMessageId` for steering inputs. Only nonempty
+strings of at most 256 characters are exposed, without truncation. Repeated text or
+an active turn ID alone is not proof that a particular input reached its owner.

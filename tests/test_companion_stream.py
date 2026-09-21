@@ -44,20 +44,31 @@ def setup(tmp_path, handler):
         token="private-runtime-token",
         transport=httpx.MockTransport(handler),
     )
-    # This delegated checkout predates root's added Codex router injection.
+    codex = FakeCodex()
+    # Spy on real composition without replacing or dropping its dependencies.
     with patch(
         "leam_api.app.companion_router",
-        lambda store, runtime, *args: router(store, runtime, FakeCodex()),
-    ):
-        return TestClient(
-            create_app(
-                tmp_path,
-                {"http://testserver"},
-                bootstrap="bootstrap-for-tests",
-                codex=FakeCodex(),
-                runtime=runtime,
-            )
+        wraps=router,
+    ) as companion_factory:
+        app = create_app(
+            tmp_path,
+            {"http://testserver"},
+            bootstrap="bootstrap-for-tests",
+            codex=codex,
+            runtime=runtime,
         )
+        inspector = companion_factory.call_args.args[3]
+        companion_factory.assert_called_once_with(
+            app.state.store, runtime, codex, inspector, agenda=app.state.agenda
+        )
+        assert inspector.store is app.state.store
+        assert inspector.runtime is runtime
+        assert inspector.codex is app.state.codex is codex
+        assert inspector.scheduler is app.state.scheduler
+        assert inspector.routines is app.state.routines
+        assert inspector.shared is app.state.shared_coding
+        assert app.state.agenda.emails is app.state.emails
+        return TestClient(app)
 
 
 def test_stream_auth_cursor_and_no_message_resend(tmp_path):

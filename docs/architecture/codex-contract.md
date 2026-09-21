@@ -73,6 +73,23 @@ not change UAT. Thread-creation uncertainty is retained rather than silently cre
 another thread; uncertain messages use existing receipt reconciliation, never automatic
 resend. A missing workspace or damaged protocol package fails clearly.
 
+Ticket chat accepts follow-ups while a reply is active. The composer captures the
+displayed active turn as optional `expectedTurnId`; ordinary submission uses native
+`turn/steer` with that precondition, unchanged input, client message ID and policy/
+attachment context. It never starts another turn automatically after steering fails.
+The installed 0.155.1 experimental schema supports these fields. Steering returns
+`turnId` without another `turn/started`; Leam normalizes its receipt to the existing
+turn shape with `operation: steer`. Settings and approvals remain with the same turn.
+
+The target is included in the request fingerprint and persisted browser draft,
+including after collapse/reload. Reconciliation requires both its exact turn and
+canonical user client ID. Only JSON-RPC invalid-request/method/parameters responses
+are definitive admission rejections: release that unused reservation, keep the draft,
+refresh history, and require another explicit send. Connection/internal errors and
+unmatched receipts remain uncertain and are never resent automatically. This is
+active-turn steering, not a second queued job. Existing start-request fingerprints
+and the original shared IDE owner path remain compatible.
+
 The panel reuses the shared VoiceComposer and finalized matching-turn correlation;
 closing unmounts speech capture/playback and transport listeners. This increment shows
 text/history/activity inline. Questions or approvals currently direct the user to the
@@ -149,3 +166,10 @@ executed; disappearance means only no longer pending and may follow a desktop an
 Opaque capability maps expire on binding changes/restart; decision receipts persist in
 the existing requests store and are covered by product-state backups. Actual owner
 positive question/approval acceptance remains pending deliberate UAT.
+
+`GET /api/codex/shared-thread` returns `{configured, thread}` from the local optional
+IDE-owner binding. `thread` is null when unconfigured, otherwise the same metadata
+used in the shared list row, excluding turns. Auth and no-store apply. This endpoint
+starts no native RPC or IDE watch and can return while native session discovery is
+pending. Clients may fetch it independently and merge by thread ID; native catalog
+pagination, unavailable-state handling and existing rows must remain intact.

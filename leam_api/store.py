@@ -29,6 +29,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS push_deliveries (id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES push_devices(id) ON DELETE CASCADE, kind TEXT NOT NULL, reminder_id TEXT, reminder_revision INTEGER, state TEXT NOT NULL, attempts INTEGER NOT NULL, next_try REAL NOT NULL, expires REAL NOT NULL, error TEXT, created REAL NOT NULL, updated REAL NOT NULL, confirmed REAL);
             CREATE TABLE IF NOT EXISTS oauth_states (id TEXT PRIMARY KEY,provider TEXT NOT NULL,session_hash TEXT NOT NULL,expires REAL NOT NULL,body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,provider TEXT NOT NULL,identity TEXT NOT NULL,body TEXT NOT NULL,state TEXT NOT NULL,error TEXT,checked REAL,created REAL NOT NULL,subject TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS email_snapshots (account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,body TEXT NOT NULL,synced REAL,error TEXT);
             CREATE TABLE IF NOT EXISTS calendars (id TEXT PRIMARY KEY,account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,external_id TEXT NOT NULL,name TEXT NOT NULL,timezone TEXT NOT NULL,can_write INTEGER NOT NULL,listed REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS calendar_scans (account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,synced REAL,error TEXT);
             CREATE TABLE IF NOT EXISTS calendar_snapshots (calendar_id TEXT PRIMARY KEY REFERENCES calendars(id) ON DELETE CASCADE,start TEXT,end TEXT,body TEXT NOT NULL,synced REAL,error TEXT);
@@ -159,7 +160,7 @@ class Store:
         return json.loads(row["result"])
 
     def release_unsent(self, request_id, fingerprint):
-        """Only for transport's explicit pre-write generation rejection."""
+        """Only for proven pre-write or explicit invalid-request admission rejection."""
         with self.connect() as db:
             db.execute(
                 "DELETE FROM requests WHERE id=? AND fingerprint=? AND state='pending'",

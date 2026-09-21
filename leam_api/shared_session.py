@@ -35,6 +35,10 @@ class SharedSessionError(RuntimeError):
     pass
 
 
+class SharedSessionRenewal(SharedSessionError):
+    """A bounded read-only subscription reached its intentional lease deadline."""
+
+
 @dataclass(frozen=True)
 class SessionOwner:
     thread_id: str
@@ -189,12 +193,13 @@ class PrivateIdeReader:
         self.installation = installation
 
     @asynccontextmanager
-    async def _connection(self, thread_id, *, lifetime=TIMEOUT):
+    async def _connection(self, thread_id, *, lifetime=TIMEOUT, renewable=False):
         if not isinstance(thread_id, str) or not 1 <= len(thread_id) <= 200:
             raise SharedSessionError("Invalid thread identity")
         writer = None
+        deadline = asyncio.timeout(lifetime)
         try:
-            async with asyncio.timeout(lifetime):
+            async with deadline:
                 await asyncio.wait_for(
                     asyncio.to_thread(validate_installation, self.installation), TIMEOUT
                 )
@@ -231,7 +236,11 @@ class PrivateIdeReader:
                     raise SharedSessionError("IDE reader identity is invalid")
                 connection.client_id = client_id
                 yield connection
-        except (TimeoutError, OSError, asyncio.IncompleteReadError) as error:
+        except TimeoutError as error:
+            if renewable and deadline.expired():
+                raise SharedSessionRenewal("Read subscription lease expired") from error
+            raise SharedSessionError("IDE connection timed out") from error
+        except (OSError, asyncio.IncompleteReadError) as error:
             raise SharedSessionError(
                 "IDE connection unavailable, closed or timed out"
             ) from error

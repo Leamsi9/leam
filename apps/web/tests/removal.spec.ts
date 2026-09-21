@@ -59,7 +59,7 @@ async function fixture(page: Page, stale = false) {
   });
   await page.setViewportSize({ width: 360, height: 740 });
   await page.goto("/");
-  await page.getByRole("button", { name: "Today", exact: true }).click();
+  await page.getByRole("button", { name: "Goals", exact: true }).click();
   return {
     writes,
     get reviewCount() {

@@ -30,7 +30,7 @@ async function setup(page: Page) {
     if(p.endsWith('/messages')){sends.push({path:p,text:route.request().postDataJSON().text});body={outcome:'submitted',run_id:run};}
     await route.fulfill({json:body});
   });
-  await page.goto('/'); await navigate(page,'Today');
+  await page.goto('/'); await navigate(page,'Goals');
   await page.getByText('Chat about Item A',{exact:true}).click();
   await expect(page.getByRole('region',{name:'Chat about Item A'}).getByLabel('Message Leam')).toBeVisible();
   await page.clock.install();

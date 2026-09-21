@@ -13,7 +13,14 @@ import {
   clearPrivateSession,
   clearAcceptedDraft,
   forgetChatPrefix,
+  sessionGeneration,
 } from "./session-cache";
+import {
+  codingEchoes,
+  saveCodingEchoes,
+  unrepresentedEchoes,
+  type CodingEcho,
+} from "./coding-pending";
 import React, { useEffect, useState, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -44,6 +51,8 @@ import { ConversationList } from "./conversation-list";
 import { CodingStreamProjection } from "./coding-stream";
 import { CalendarView } from "./calendar";
 import { Today } from "./today";
+import { Goals } from "./goals";
+import { ContextOverview } from "./context-overview";
 import { RoutinesPanel, RoutineInbox } from "./routines";
 import { UpdatesPanel } from "./updates";
 import { Navigation } from "./navigation";
@@ -72,6 +81,8 @@ function App() {
         "coding",
         "calendar",
         "today",
+        "goals",
+        "overview",
         "settings",
         "routines",
         "updates",
@@ -92,6 +103,14 @@ function App() {
     };
     window.addEventListener("leam:open-coding", openCoding);
     return () => window.removeEventListener("leam:open-coding", openCoding);
+  }, []);
+  useEffect(() => {
+    const navigate = (event: Event) => {
+      const view = (event as CustomEvent).detail;
+      if (["today", "goals", "calendar", "settings", "overview"].includes(view)) setTab(view);
+    };
+    window.addEventListener("leam:navigate", navigate);
+    return () => window.removeEventListener("leam:navigate", navigate);
   }, []);
   useEffect(() => {
     api("/auth/status")
@@ -274,9 +293,13 @@ function App() {
           <>
             <Today fail={fail} />
             <section className="page">
-              <RoutineInbox fail={fail} />
+              <details><summary>Routine reminders</summary><RoutineInbox fail={fail} /></details>
             </section>
           </>
+        ) : tab === "goals" ? (
+          <Goals fail={fail} />
+        ) : tab === "overview" ? (
+          <section className="page"><h1>Across Leam</h1><ContextOverview /></section>
         ) : tab === "routines" ? (
           <RoutinesPanel fail={fail} />
         ) : tab === "calendar" ? (
@@ -375,24 +398,58 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
     [active, setActive] = useState(""),
     [requests, setRequests] = useState<Data[]>([]),
     [cursor, setCursor] = useState<string | null>(null),
+    [echoes, setEchoesState] = useState<CodingEcho[]>(() =>
+      codingEchoes(initialId),
+    ),
+    [displayNotice, setDisplayNotice] = useState(
+      initial?.turns?.length
+        ? "Showing saved conversation while checking the connection."
+        : "",
+    ),
     [newWorkspace, setNewWorkspace] = useState("");
   const selected = useRef(initialId);
   const selectedShared = useRef(restored.current?.transport === "ide-owner");
+  const [sharedBindingId, setSharedBindingId] = useState<
+    string | null | undefined
+  >();
+  const sharedBinding = useRef<string | null | undefined>(undefined);
+  const bindingAllows = (id: string) =>
+    sharedBinding.current === undefined || sharedBinding.current === id;
+  const missingBindingNotice =
+    "This shared session is no longer configured. Its saved conversation remains read-only.";
   const submitting = useRef(false);
   const streamRevision = useRef(0);
   const validatedAt = useRef(initial?.validatedAt || 0);
   const projection = useRef(new CodingStreamProjection());
   const currentTurns = useRef(turns);
+  const currentEchoes = useRef(echoes);
+  function updateEchoes(
+    id: string,
+    update: CodingEcho[] | ((previous: CodingEcho[]) => CodingEcho[]),
+  ) {
+    const previous =
+      selected.current === id ? currentEchoes.current : codingEchoes(id);
+    const next = typeof update === "function" ? update(previous) : update;
+    saveCodingEchoes(id, next);
+    if (selected.current === id) {
+      currentEchoes.current = next;
+      setEchoesState(next);
+    }
+  }
   function setTurns(value: Data[] | ((previous: Data[]) => Data[])) {
     const next =
       typeof value === "function" ? value(currentTurns.current) : value;
     currentTurns.current = next;
     setTurnsState(next);
+    const remaining = unrepresentedEchoes(currentEchoes.current, next);
+    if (selected.current && remaining.length !== currentEchoes.current.length)
+      updateEchoes(selected.current, remaining);
   }
   const submission = useRef<{
     id: string;
     text: string;
     attachmentIds?: string[];
+    expectedTurnId?: string;
   } | null>(null);
   const files = useAttachmentDraft("coding:" + (thread?.id || ""));
   const [uploading, setUploading] = useState(false);
@@ -401,6 +458,7 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
   const [threadCursor, setThreadCursor] = useState<string | null>(
     () => cachedChat("coding:threads")?.nextCursor || null,
   );
+  const latestThreadCursor = useRef(threadCursor);
   const [listing, setListing] = useState(false);
   const [listNotice, setListNotice] = useState("");
   const listFetchedAt = useRef(0);
@@ -411,6 +469,41 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
     listBusy.current = true;
     setListing(true);
     const request = ++listRequest.current;
+    if (!more) {
+      // The configured shared row is local metadata, independent of native IPC.
+      void api("/codex/shared-thread")
+        .then((result) => {
+          if (
+            request !== listRequest.current ||
+            typeof result.configured !== "boolean"
+          )
+            return;
+          if (result.configured && typeof result.thread?.id !== "string")
+            return;
+          const shared = result.configured ? result.thread : null;
+          sharedBinding.current = shared?.id || null;
+          setSharedBindingId(sharedBinding.current);
+          if (selectedShared.current && !bindingAllows(selected.current)) {
+            setConnected(false);
+            setDisplayNotice(missingBindingNotice);
+          }
+          setThreads((previous) => {
+            const rows = previous.filter(
+              (item) =>
+                item.transport !== "ide-owner" && item.id !== shared?.id,
+            );
+            if (shared) rows.unshift(shared);
+            rememberChat("coding:threads", {
+              threads: rows,
+              nextCursor: latestThreadCursor.current,
+            });
+            return rows;
+          });
+        })
+        .catch(() => {
+          /* The ordinary catalog remains available on older servers. */
+        });
+    }
     try {
       const r = await api(
         "/codex/threads" +
@@ -418,11 +511,23 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
       );
       if (request !== listRequest.current) return;
       if (!more) listFetchedAt.current = Date.now();
-      if (!more) setListNotice([
-        r.leamHandoffsUnavailable ? "Some handoff sessions could not be checked. Refresh to try again." : "",
-        r.leamHandoffsTruncated ? "The latest 10 accepted handoffs are checked here. Older handoffs remain accessible from their linked proposal." : "",
-      ].filter(Boolean).join(" "));
-      const next = r.nextCursor || null;
+      if (!more)
+        setListNotice(
+          [
+            r.leamHandoffsUnavailable
+              ? "Some handoff sessions could not be checked. Refresh to try again."
+              : "",
+            r.leamHandoffsTruncated
+              ? "The latest 10 accepted handoffs are checked here. Older handoffs remain accessible from their linked proposal."
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+      const receivedCursor = r.nextCursor || null;
+      const next =
+        more && receivedCursor === threadCursor ? null : receivedCursor;
+      latestThreadCursor.current = next;
       setThreads((previous) => {
         const rows = more
           ? [
@@ -431,13 +536,26 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
               ).values(),
             ]
           : r.data || [];
+        const allowed = rows.filter(
+          (item: Data) =>
+            item.transport !== "ide-owner" || bindingAllows(item.id),
+        );
+        const shared = previous.find(
+          (item) => item.transport === "ide-owner" && bindingAllows(item.id),
+        );
+        if (shared && !allowed.some((item: Data) => item.id === shared.id))
+          allowed.unshift(shared);
         const chosen = previous.find((item) => item.id === selected.current);
-        if (chosen && !rows.some((item: Data) => item.id === chosen.id))
-          rows.unshift(chosen);
-        rememberChat("coding:threads", { threads: rows, nextCursor: next });
-        return rows;
+        if (
+          chosen &&
+          (chosen.transport !== "ide-owner" || bindingAllows(chosen.id)) &&
+          !allowed.some((item: Data) => item.id === chosen.id)
+        )
+          allowed.unshift(chosen);
+        rememberChat("coding:threads", { threads: allowed, nextCursor: next });
+        return allowed;
       });
-      setThreadCursor(more && next === threadCursor ? null : next);
+      setThreadCursor(next);
     } catch (e) {
       if (request === listRequest.current) fail(e);
     } finally {
@@ -480,8 +598,10 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
       setActive("");
       setConnected(false);
       submission.current = null;
+      updateEchoes(id, []);
       rememberSession("coding:selected", null);
       setThreads([]);
+      latestThreadCursor.current = null;
       setThreadCursor(null);
       void load();
       return;
@@ -518,9 +638,27 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
               [...(r.data || [])].reverse(),
               currentTurns.current,
             );
-        setTurns(next);
-        setCursor(r.nextCursor || null);
-        setConnected(Boolean(current.connected));
+        if (
+          selectedShared.current &&
+          !current.connected &&
+          !next.length &&
+          currentTurns.current.length
+        ) {
+          setDisplayNotice(
+            "Showing the last loaded conversation while the shared connection recovers.",
+          );
+        } else {
+          setTurns(next);
+          setCursor(r.nextCursor || null);
+          setDisplayNotice(
+            current.connected
+              ? ""
+              : "Showing the last loaded conversation while the connection recovers.",
+          );
+        }
+        const bindingValid = !selectedShared.current || bindingAllows(id);
+        if (!bindingValid) setDisplayNotice(missingBindingNotice);
+        setConnected(Boolean(current.connected) && bindingValid);
         setThread((previous) =>
           previous?.id === id
             ? {
@@ -543,18 +681,23 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
   async function choose(t: Data) {
     stopConversation();
     stopRecognition();
-    if (selected.current !== t.id) {
+    const sameThread = selected.current === t.id;
+    if (!sameThread) {
       streamRevision.current++;
       projection.current = new CodingStreamProjection();
     }
     selected.current = t.id;
+    if (!sameThread) updateEchoes(t.id, codingEchoes(t.id));
     // An accepted handoff can be readable before native thread/list indexes it.
     // Keep its supplied identity visible while list refresh reconciles metadata.
     setThreads((previous) => {
       const rows = previous.some((item) => item.id === t.id)
-        ? previous.map((item) => item.id === t.id ? { ...item, ...t } : item)
+        ? previous.map((item) => (item.id === t.id ? { ...item, ...t } : item))
         : [t, ...previous];
-      rememberChat("coding:threads", { threads: rows, nextCursor: threadCursor });
+      rememberChat("coding:threads", {
+        threads: rows,
+        nextCursor: threadCursor,
+      });
       return rows;
     });
     selectedShared.current = t.transport === "ide-owner";
@@ -581,10 +724,16 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
     validatedAt.current = saved?.validatedAt || 0;
     setThread(t);
     setConnected(false);
+    const savedTurns = saved?.turns || (sameThread ? currentTurns.current : []);
+    setDisplayNotice(
+      savedTurns.length
+        ? "Showing saved conversation while checking the connection."
+        : "",
+    );
     setTurns(
       selectedShared.current
-        ? saved?.turns || []
-        : projection.current.reconcile(saved?.turns || []),
+        ? savedTurns
+        : projection.current.reconcile(savedTurns),
     );
     setActive("");
     setCursor(saved?.cursor || null);
@@ -715,6 +864,14 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
       history(id, useFresh).catch(fail);
       void requests();
     };
+    stream.onerror = () => {
+      if (!current()) return;
+      setConnected(false);
+      if (currentTurns.current.length)
+        setDisplayNotice(
+          "Showing the last loaded conversation while the connection recovers.",
+        );
+    };
     return () => {
       closed = true;
       stream.close();
@@ -741,13 +898,16 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
       (!value.trim() && !files.ids.length) ||
       uploading ||
       submitting.current ||
-      !connected
+      !connected ||
+      (thread.transport === "ide-owner" && !bindingAllows(thread.id))
     )
       throw new Error(
         "Connect this session and wait for the current submission before sending.",
       );
     submitting.current = true;
     const threadId = thread.id;
+    const authGeneration = sessionGeneration();
+    let attemptId = "";
     setBusy(true);
     try {
       if (submission.current && submission.current.text !== value)
@@ -761,6 +921,16 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
       };
       setText(value);
       const attempt = submission.current;
+      attemptId = attempt.id;
+      updateEchoes(threadId, (previous) => [
+        ...previous.filter((echo) => echo.id !== attempt.id),
+        {
+          id: attempt.id,
+          text: attempt.text,
+          state: "sending",
+        },
+      ]);
+      chatScroll.follow();
       sessionStorage.setItem(
         "leam-submission:" + threadId,
         JSON.stringify(attempt),
@@ -772,6 +942,9 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
           "POST",
           {
             text: attempt.text,
+            ...(attempt.expectedTurnId
+              ? { expectedTurnId: attempt.expectedTurnId }
+              : {}),
             ...(attempt.attachmentIds?.length
               ? { attachmentIds: attempt.attachmentIds }
               : {}),
@@ -787,6 +960,9 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
           : await api(`/codex/threads/${threadId}/turns`, "POST", {
               text: attempt.text,
               requestId: attempt.id,
+              ...(attempt.expectedTurnId
+                ? { expectedTurnId: attempt.expectedTurnId }
+                : {}),
               ...(attempt.attachmentIds?.length
                 ? { attachmentIds: attempt.attachmentIds }
                 : {}),
@@ -803,6 +979,20 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
           "Delivery has no matching turn receipt. Check the conversation before retrying.",
         );
       sessionStorage.removeItem("leam-submission:" + threadId);
+      updateEchoes(threadId, (previous) =>
+        unrepresentedEchoes(
+          previous.map((echo) =>
+            echo.id === attempt.id
+              ? {
+                  ...echo,
+                  state: "accepted",
+                  turnId: r.turn.id,
+                }
+              : echo,
+          ),
+          selected.current === threadId ? currentTurns.current : [],
+        ),
+      );
       clearAcceptedDraft("coding", threadId, attempt.text);
       files.clear(attempt.attachmentIds || []);
       if (selected.current === threadId) {
@@ -818,6 +1008,12 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
         autoReply: r.operation !== "steer",
       };
     } catch (e) {
+      if (authGeneration === sessionGeneration() && attemptId)
+        updateEchoes(threadId, (previous) =>
+          previous.map((echo) =>
+            echo.id === attemptId ? { ...echo, state: "uncertain" } : echo,
+          ),
+        );
       fail(e);
       throw e;
     } finally {
@@ -947,6 +1143,7 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
                 {thread.connectionError}
               </p>
             )}
+            {displayNotice && <p role="status">{displayNotice}</p>}
             {!connected && (
               <div className="handoff">
                 <p>
@@ -956,13 +1153,26 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
                 </p>
                 <button
                   className="secondary"
+                  disabled={
+                    thread.transport === "ide-owner" &&
+                    sharedBindingId !== undefined &&
+                    sharedBindingId !== thread.id
+                  }
                   onClick={async () => {
+                    if (
+                      thread.transport === "ide-owner" &&
+                      !bindingAllows(thread.id)
+                    )
+                      return;
                     try {
                       await api(`/codex/threads/${thread.id}/connect`, "POST", {
                         handoffConfirmed: true,
                       });
                       if (selected.current === thread.id) {
-                        setConnected(true);
+                        setConnected(
+                          thread.transport !== "ide-owner" ||
+                            bindingAllows(thread.id),
+                        );
                         await history(thread.id);
                       }
                     } catch (e) {
@@ -1008,6 +1218,25 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
                     <TurnMessages turn={t} threadId={thread.id} />
                   </React.Fragment>
                 ))}
+                {echoes.map((echo) => (
+                  <article
+                    className="message user"
+                    key={echo.id}
+                    data-local-submission={echo.id}
+                  >
+                    <span className="message-label">YOU</span>
+                    <div className="prose">
+                      {echo.text || "Attachment message"}
+                    </div>
+                    <small role="status">
+                      {echo.state === "sending"
+                        ? "Sending — waiting for a delivery receipt."
+                        : echo.state === "accepted"
+                          ? "Accepted — waiting for the conversation to refresh."
+                          : "Delivery uncertain — check the conversation before retrying."}
+                    </small>
+                  </article>
+                ))}
                 {requests
                   .filter((r) => r.params?.threadId === thread.id)
                   .map((r) => (
@@ -1050,6 +1279,12 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
                     )
                       return;
                     sessionStorage.removeItem("leam-submission:" + thread.id);
+                    if (submission.current)
+                      updateEchoes(thread.id, (previous) =>
+                        previous.filter(
+                          (echo) => echo.id !== submission.current?.id,
+                        ),
+                      );
                     submission.current = null;
                     setText("");
                   }}
@@ -1248,6 +1483,9 @@ function Message({
         <div className="prose">
           {(item.content || []).map((c: Data) => c.text || "").join("\n")}
         </div>
+        {item.deliveryStatus && (
+          <small>Codex follow-up status: {String(item.deliveryStatus)}</small>
+        )}
       </article>
     );
   if (item.type === "agentMessage")

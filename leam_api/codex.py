@@ -6,7 +6,9 @@ import uuid
 
 
 class CodexError(Exception):
-    pass
+    def __init__(self, message, *, rpc_code=None):
+        super().__init__(message)
+        self.rpc_code = rpc_code
 
 
 class CodexGenerationError(CodexError):
@@ -92,7 +94,8 @@ class CodexClient:
                                 CodexError(
                                     packet["error"].get(
                                         "message", "Codex request failed"
-                                    )
+                                    ),
+                                    rpc_code=packet["error"].get("code"),
                                 )
                             )
                         else:

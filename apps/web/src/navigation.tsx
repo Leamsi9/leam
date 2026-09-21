@@ -2,6 +2,8 @@ import { useRef } from "react";
 import {
   MessageCircle,
   Sun,
+  Target,
+  Layers,
   CalendarDays,
   Repeat,
   Code2,
@@ -15,14 +17,16 @@ import { UpdatesBadge } from "./updates";
 const destinations = [
   { id: "companion", label: "Companion", Icon: MessageCircle },
   { id: "today", label: "Today", Icon: Sun },
+  { id: "goals", label: "Goals", Icon: Target },
   { id: "calendar", label: "Calendar", Icon: CalendarDays },
   { id: "routines", label: "Routines", Icon: Repeat },
   { id: "coding", label: "Coding", Icon: Code2 },
+  { id: "overview", label: "Across Leam", Icon: Layers },
   { id: "settings", label: "Settings", Icon: Settings },
   { id: "updates", label: "Updates", Icon: Bell },
   { id: "backlog", label: "Backlog", Icon: ListTodo },
 ];
-const primary = new Set(["companion", "today", "coding"]);
+const primary = new Set(["companion", "today", "goals", "coding"]);
 export function Navigation({
   tab,
   onSelect,

@@ -5103,6 +5103,22 @@
           }
         }
       }
+    },
+    "/api/codex/shared-thread": {
+      "get": {
+        "summary": "Shared Thread Metadata",
+        "operationId": "shared_thread_metadata_api_codex_shared_thread_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

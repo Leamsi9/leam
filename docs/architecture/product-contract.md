@@ -41,3 +41,15 @@ the companion; supported administration uses explicit domain controls, and code 
 infrastructure engineering is delegated through Codex with pinned agent-protocols.
 Broader inspection and delegation are pending; a static architecture description
 must not be presented as full runtime access.
+
+## Coding display continuity
+Coding renders each local submission before receipt lookup or dispatch, labels sending, accepted and uncertain outcomes separately, and retires the display copy only when an authoritative user item carries the exact request/client identity. Equal text or an existing turn ID cannot prove delivery. No reload or reconnect automatically resends a pending submission.
+
+Authenticated Coding display snapshots may survive deliberate reload in session storage: at most four entries, 1 MiB aggregate, 512 KiB per entry, and ten minutes old. Writes coalesce for one second with a pagehide flush. Restored snapshots are unvalidated and read-only until fresh server state arrives; authentication loss clears them. Last-good shared history remains visible during a disconnected empty refresh. Explicit removal or replacement of the shared binding retires stale catalog rows and prevents reconnect/send through that former binding.
+
+## Read-only email
+Google mailbox access is a separate per-account opt-in from calendar access. Its fresh PKCE/session-bound consent is matched to the original account and current OAuth client; the actual token response must grant `gmail.readonly` and renewable access. Mail credentials occupy a separate encrypted account slot so declining email or losing mail access does not replace calendar credentials. Incremental Google authorization can include previously granted scopes; Leam exposes only GET message reads through this adapter.
+
+Email synchronization is explicit: at most 20 messages from the inbox in the last 30 days, one list page, selected From/Subject headers, snippets, timestamps and labels, within 30 seconds. Bodies and attachments are not requested or retained. Gmail's unread/important labels are source metadata, not a model priority decision. A saved snapshot is encrypted, atomically replaced only after a successful bounded read, and includes freshness, errors and truncation. It becomes stale after 15 minutes. GET `/api/email` reads local snapshots only; missing consent, failed sync and a genuinely empty successful snapshot remain distinct. The source remains authoritative and all message text is untrusted data.
+
+Local email removal deletes the current mailbox credential and snapshot while preserving the calendar account. Disconnecting the whole account cascades snapshot deletion. Neither operation revokes the Google grant; older backups are a separate retention boundary. There is no email sending, archiving, label mutation, mark-read action, provider deletion, automatic extraction into memory or model ranking in this increment. Enable Gmail API on the configured Google OAuth project before synchronizing. Live consent/provider acceptance is separate from controlled fixture tests.

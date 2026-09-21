@@ -53,13 +53,14 @@ test("reopened commitment draft must keep its original revision when another wri
     }
     await route.fulfill({ json: body });
   });
-  await page.goto("/?view=today");
+  await page.goto("/?view=goals");
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   await page
     .getByLabel("Commitment title", { exact: true })
     .fill("My resumed draft");
   await page.getByRole("button", { name: "Close commitment editor" }).click();
   item = { ...item, revision: 2, notes: "New note saved from another client" };
+  await page.getByText("Progress date and filters", { exact: true }).click();
   await page.getByLabel("Viewing date").fill("2026-09-21");
   await expect(
     page.getByText("New note saved from another client", { exact: true }),

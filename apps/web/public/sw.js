@@ -108,8 +108,8 @@ self.addEventListener("push", (event) => {
         typeof payload.body === "string"
           ? payload.body
           : "You have a reminder. Open Leam to review it.",
-      icon: "/icon.svg",
-      badge: "/icon.svg",
+      icon: "/leam-icon-192.png",
+      badge: "/favicon-32.png",
       tag: typeof payload.tag === "string" ? payload.tag : "leam-reminder",
       data: { url: "/?view=today" },
     }),

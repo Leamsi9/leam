@@ -59,6 +59,8 @@ def expected_schema():
         AttachmentStore(store)
         # Additive usage ledgers may be absent from earlier compatible snapshots.
         required -= {"usage_admissions", "usage_observations", "usage_codex_cursors"}
+        # Older archives predate mail caching; present tables still match exact SQL.
+        required.discard("email_snapshots")
         Backlog(store)
         Routines(store)
         Updates(store)
@@ -181,6 +183,24 @@ def validate_vault(path, key):
                 decrypt("config:" + name.split(":", 1)[1], json.loads(raw))
             for key_id, raw in db.execute("SELECT id,body FROM accounts"):
                 decrypt("account:" + key_id, raw)
+            if db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='email_snapshots'"
+            ).fetchone():
+                from .email import MESSAGE_LIMIT
+
+                for account_id, raw in db.execute(
+                    "SELECT account_id,body FROM email_snapshots"
+                ):
+                    snapshot = decrypt("email-snapshot:" + account_id, raw)
+                    # Validate the cache envelope, allowing additive item/derived metadata.
+                    if (
+                        not isinstance(snapshot, dict)
+                        or not isinstance(snapshot.get("items"), list)
+                        or len(snapshot["items"]) > MESSAGE_LIMIT
+                        or any(not isinstance(item, dict) for item in snapshot["items"])
+                        or not isinstance(snapshot.get("truncated"), bool)
+                    ):
+                        raise ValueError("Invalid email snapshot")
     except (InvalidTag, ValueError, TypeError, sqlite3.Error) as error:
         raise ValueError(
             "Backup vault key does not decrypt saved account state"

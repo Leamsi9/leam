@@ -225,7 +225,7 @@ test("Coding uses separate open/rename controls and confirms native deletion sem
 });
 test("mobile controls fit and list scroll does not consume conversation area", async ({
   page,
-}) => {
+}, testInfo) => {
   await setup(page);
   for (const width of [360, 390, 1440]) {
     await page.setViewportSize({ width, height: 844 });
@@ -254,7 +254,7 @@ test("mobile controls fit and list scroll does not consume conversation area", a
   }
   await page.setViewportSize({ width: 360, height: 844 });
   await page.screenshot({
-    path: "/tmp/leam-build-control/conversation-list-360.png",
+    path: testInfo.outputPath("conversation-list-360.png"),
   });
 });
 

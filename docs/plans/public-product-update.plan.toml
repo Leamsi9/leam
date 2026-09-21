@@ -1,0 +1,21 @@
+title = "Audited public product source update"
+branch = "prepare/public-product-update-20260921"
+baseline = "545b8e2d0a950d6291f614f6a582b99ee3865d97"
+root_dir = "../.."
+phase_order = ["export"]
+[phases.export]
+summary = "Public-safe source export and source verification"
+[[phases.export.checks]]
+id = "callers"
+type = "command"
+command = "PYTHONPATH=.:tests .venv/bin/python -m pytest -q tests/test_agenda.py tests/test_agenda_email.py tests/test_calendar_visibility.py tests/test_calendar_instant.py tests/test_email.py tests/test_ticket_followup.py tests/test_shared_catalog.py tests/test_shared_stream_renewal.py tests/test_backup_email_compatibility.py tests/test_companion_stream.py"
+[[phases.export.checks]]
+id = "clean"
+type = "git_clean"
+[[phases.export.checks]]
+id = "ahead"
+type = "git_head_ahead"
+[[phases.export.checks]]
+id = "binding"
+type = "git_branch_worktree"
+current = true

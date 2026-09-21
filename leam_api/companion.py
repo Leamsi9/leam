@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from .attachments import AttachmentStore, descriptor
+from .agenda import Agenda
 from .companion_context import (
     build_model_context,
     legacy_user_offset,
@@ -79,11 +80,12 @@ class MemoryEdit(Memory):
     revision: int = Field(ge=1)
 
 
-def router(store, runtime, codex, inspector=None):
+def router(store, runtime, codex, inspector=None, *, agenda=None):
     routes = APIRouter(prefix="/api")
     locks = defaultdict(asyncio.Lock)
     titles = ConversationTitles(store)
     attachments = AttachmentStore(store)
+    agenda = agenda or Agenda(store, runtime)
 
     inspector = inspector or SystemInspector(store, runtime)
 
@@ -291,6 +293,7 @@ def router(store, runtime, codex, inspector=None):
                     "Runtime did not confirm deletion. Refresh the list before retrying.",
                 )
             titles.forget(thread_id)
+            agenda.retire_chat(thread_id)
             return result
 
     @routes.post("/companion/threads")
@@ -543,6 +546,9 @@ def router(store, runtime, codex, inspector=None):
             linked_item = item_context(store, thread_id)
             if linked_item:
                 context["linkedItem"] = linked_item
+            daily_agenda = agenda.reference(thread_id)
+            if daily_agenda:
+                context["dailyAgenda"] = daily_agenda
             # Grounding is explicitly scoped as data. Codex messages never use this envelope.
             model_context = build_model_context(store, thread_id, context)
             path = (

@@ -9,7 +9,8 @@ test("measured habits, undo and date navigation work on mobile", async ({
     .locator("input[name=password]")
     .fill("local-browser-acceptance-only");
   await page.getByRole("button", { name: /Enter Leam/ }).click();
-  await page.getByRole("button", { name: "Today", exact: true }).click();
+  await page.getByRole("button", { name: "Goals", exact: true }).click();
+  await page.getByText("Progress date and filters", { exact: true }).click();
   await page.getByLabel("Viewing date").fill("2026-09-20");
   await page.getByRole("button", { name: "Plan a commitment" }).click();
   const title = "Measured walk " + Date.now();
@@ -40,9 +41,10 @@ test("measured habits, undo and date navigation work on mobile", async ({
   ).toHaveValue("7");
   await page.reload();
   await page
-    .getByRole("button", { name: "Today", exact: true })
+    .getByRole("button", { name: "Goals", exact: true })
     .first()
     .click();
+  await page.getByText("Progress date and filters", { exact: true }).click();
   await page.getByLabel("Viewing date").fill("2026-09-20");
   await expect(
     card.getByRole("spinbutton", { name: "Progress for " + title }),

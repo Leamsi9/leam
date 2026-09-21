@@ -62,7 +62,7 @@ for (const width of [390, 1440])
     await page.goto("/");
     await navigate(page, "Companion");
     await chooseConversation(page, "main");
-    await navigate(page, "Today");
+    await navigate(page, "Goals");
     await expect(
       page.getByText("Chat about Walk", { exact: true }),
     ).toBeVisible();
