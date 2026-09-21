@@ -18,3 +18,5 @@ npm run build --prefix apps/web
 ```
 
 Consult the relevant subsystem contract and test file before running a live test. Keep captured private evidence outside Git and tie each deployment claim to the artifact actually observed.
+
+`test_mobile_restore.py`, `test_recovery_bindings.py`, `test_recovery_integration.py`, `test_candidate_rollout.py` and `test_restore_automation.py` cover protected descriptor replacement, archive/vault identity, retained generations, automation holds, fresh review before resume, stale previews, unfinished operations, failed-health rollback, cancellation and operation-lock ownership. They use isolated data and controlled service/sender adapters. The matching mobile restore and automation browser fixtures cover review, confirmation, receipt reconciliation and logout races. These checks do not perform an installed restore or establish physical-device delivery; installation adoption and restore/rollback acceptance remain separate operator tasks.

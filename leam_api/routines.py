@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import Field, field_validator
 
+from .restore_automation import state as automation_state, MESSAGE as AUTOMATION_PAUSED
 from .commitments import Commitment, Input
 from .reminders import due_at
 
@@ -68,7 +69,8 @@ class Routines:
         self.last_check = None
         self.last_error = None
         with store.connect() as db:
-            db.executescript("""
+            db.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS routines (
                     id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
                     body TEXT NOT NULL, next_due REAL, created REAL NOT NULL, updated REAL NOT NULL
@@ -80,7 +82,8 @@ class Routines:
                     created REAL NOT NULL, dismissed REAL
                 );
                 CREATE INDEX IF NOT EXISTS routine_runs_created ON routine_runs(created DESC);
-            """)
+            """
+            )
 
     @staticmethod
     def item(row):
@@ -194,6 +197,8 @@ class Routines:
         request_id = str(body.requestId)
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if automation_state(db)["held"]:
+                raise ValueError(AUTOMATION_PAUSED)
             old = db.execute(
                 "SELECT * FROM routine_runs WHERE id=?", (request_id,)
             ).fetchone()
@@ -224,6 +229,11 @@ class Routines:
         delivered = 0
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            automation = automation_state(db)
+            if automation["held"]:
+                self.last_check = now
+                self.last_error = None
+                return {"delivered": 0, "checkedAt": now, "automationHeld": True}
             for row in db.execute(
                 "SELECT * FROM routines WHERE next_due<=? ORDER BY next_due", (now,)
             ).fetchall():
@@ -231,6 +241,8 @@ class Routines:
                 latest = max(row["next_due"], occurrence(body, now, previous=True))
                 # Coalesce downtime to the latest occurrence. Expire anything >24h old.
                 state = "delivered" if now - latest <= 86400 else "expired"
+                if automation["cutoff"] is not None and latest <= automation["cutoff"]:
+                    state = "expired"
                 key = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_URL,
@@ -299,7 +311,11 @@ def router(domain):
 
     @routes.get("/status")
     async def status():
+        with domain.store.connect() as db:
+            automation = automation_state(db)
         return {
+            "automationHeld": automation["held"],
+            "automationInvalid": automation["invalid"],
             "lastCheck": domain.last_check,
             "error": domain.last_error,
             "healthy": domain.last_error is None

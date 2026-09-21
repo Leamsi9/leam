@@ -20,6 +20,7 @@ from py_vapid import Vapid
 from pydantic import Field, field_validator
 from pywebpush import WebPusher
 
+from .restore_automation import state as automation_state, MESSAGE as AUTOMATION_PAUSED
 from .commitments import Input
 
 
@@ -166,6 +167,7 @@ class Push:
 
     def status(self):
         with self.store.connect() as db:
+            automation = automation_state(db)
             devices = [
                 dict(r)
                 for r in db.execute(
@@ -179,6 +181,8 @@ class Push:
                 )
             ]
         return {
+            "automationHeld": automation["held"],
+            "automationInvalid": automation["invalid"],
             "publicKey": self.public_key,
             "contact": self.store.get("push_contact", ""),
             "devices": devices,
@@ -208,6 +212,8 @@ class Push:
         now = self.clock()
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if automation_state(db)["held"]:
+                raise HTTPException(409, AUTOMATION_PAUSED)
             device = db.execute(
                 "SELECT id FROM push_devices WHERE id=? AND state='active'", (key,)
             ).fetchone()
@@ -249,6 +255,9 @@ class Push:
                 return
             with self.store.connect() as db:
                 db.execute("BEGIN IMMEDIATE")
+                if automation_state(db)["held"]:
+                    self.last_check = now
+                    return
                 # Each ready revision may be delivered once per device. Snoozes create a new revision.
                 for row in db.execute(
                     "SELECT n.id,n.revision,d.id AS device_id FROM reminder_jobs n CROSS JOIN push_devices d WHERE n.state='ready' AND d.state='active'"
@@ -296,6 +305,9 @@ class Push:
                     )
             for row in rows:
                 with self.store.connect() as db:
+                    if automation_state(db)["held"]:
+                        self.last_check = now
+                        return
                     still_pending = db.execute(
                         "SELECT p.id FROM push_deliveries p JOIN push_devices d ON d.id=p.device_id WHERE p.id=? AND p.state='pending' AND d.state='active'",
                         (row["id"],),
@@ -321,9 +333,11 @@ class Push:
                     endpoint = validate_endpoint(sub["endpoint"])
                     payload = {
                         "title": "Leam",
-                        "body": "This is your Leam test notification."
-                        if row["kind"] == "test"
-                        else "You have a reminder. Open Leam to review it.",
+                        "body": (
+                            "This is your Leam test notification."
+                            if row["kind"] == "test"
+                            else "You have a reminder. Open Leam to review it."
+                        ),
                         "tag": "leam-" + (row["reminder_id"] or row["id"]),
                         "url": "/?view=today",
                     }
@@ -369,10 +383,12 @@ class Push:
                                 30,
                                 min(
                                     3600,
-                                    float(raw)
-                                    if raw.isdigit()
-                                    else parsedate_to_datetime(raw).timestamp()
-                                    - self.clock(),
+                                    (
+                                        float(raw)
+                                        if raw.isdigit()
+                                        else parsedate_to_datetime(raw).timestamp()
+                                        - self.clock()
+                                    ),
                                 ),
                             )
                         except (ValueError, TypeError, OverflowError):

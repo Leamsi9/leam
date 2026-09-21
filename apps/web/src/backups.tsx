@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { api, type Data } from "./api";
+import { RestoreAutomationSettings } from "./restore-automation";
 
 type Props = { fail: (error: unknown) => void };
 export function BackupSettings({ fail }: Props) {
@@ -88,29 +89,26 @@ export function BackupSettings({ fail }: Props) {
           </li>
         ))}
       </ul>
+      <RestoreAutomationSettings fail={fail} />
       <details>
         <summary>Restore and rollback</summary>
         <p>
-          Restore is currently an offline operator procedure. The restore
-          command validates the archive, makes a fresh safety backup of current
-          state, and writes a new private data directory. It never replaces the
-          running database.
+          Open the independent Recovery page from Settings to restore a local
+          backup after operator activation. Review the snapshot, confirm once,
+          and follow its durable receipt even while the main app is stopped.
+          A fresh safety backup and the previous data directory are retained.
         </p>
         <p>
-          Stop the candidate API, MCP listener and any other writers before
-          switching them to the restored directory. Restart with the same
-          compatible application version, sign in again, and test the restored
-          data. Keep the previous directory for rollback.
+          Recovery also offers explicit rollback. Both operations pause scheduled
+          automations until you review and resume them in Settings. Restoring invalidates product
+          browser sessions, so sign in again and check the restored data.
+          Codex and Companion transcripts, external actions and runtime tool
+          permissions are not restored. Only backups matching this installation's
+          MCP identity and current compatible release are accepted.
         </p>
         <p>
-          Existing browser sessions and incomplete account sign-in attempts are
-          invalidated on restore. Previously sent calendar or coding operations
-          are not undone by restoring local state. Runtime identity and Codex
-          session storage need their own recovery plan.
-        </p>
-        <p>
-          Ask in Coding to run the documented backup restoration procedure. Full
-          mobile restore orchestration is not yet implemented.
+          Before activation, the documented offline operator restore remains
+          available through Coding. Keep a separate downloaded backup too.
         </p>
       </details>
     </section>

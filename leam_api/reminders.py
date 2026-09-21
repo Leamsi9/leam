@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException
 from pydantic import Field
 
+from .restore_automation import state as automation_state
 from .commitments import Commitments, Input, Progress, entity
 
 
@@ -57,6 +58,12 @@ class Scheduler:
         ready = 0
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            automation = automation_state(db)
+            if automation["held"]:
+                self.last_check = now
+                self.last_error = None
+                return {"newlyReady": 0, "checkedAt": now, "automationHeld": True}
+            cutoff = automation["cutoff"]
             commitments = {
                 r["id"]: json.loads(r["body"])
                 for r in db.execute(
@@ -82,9 +89,11 @@ class Scheduler:
                     db.execute(
                         "UPDATE reminder_jobs SET state=?,revision=revision+1,updated=? WHERE id=?",
                         (
-                            "completed"
-                            if log and json.loads(log["body"]).get("done")
-                            else "cancelled",
+                            (
+                                "completed"
+                                if log and json.loads(log["body"]).get("done")
+                                else "cancelled"
+                            ),
                             now,
                             row["id"],
                         ),
@@ -130,6 +139,8 @@ class Scheduler:
                             snoozed = True
                         elif (raw.get("lastReminder") or {}).get(day):
                             state = "dismissed"
+                    if cutoff is not None and due <= cutoff:
+                        state = "expired"
                     db.execute(
                         "INSERT INTO reminder_jobs VALUES (?,?,?,?,?,?,?,?,?)",
                         (
@@ -143,6 +154,17 @@ class Scheduler:
                             now,
                             now,
                         ),
+                    )
+                elif (
+                    existing["state"] == "expired"
+                    and cutoff is not None
+                    and due > max(cutoff, now)
+                    and due != existing["due"]
+                ):
+                    # An explicit later reminder-time edit can schedule future work.
+                    db.execute(
+                        "UPDATE reminder_jobs SET state='scheduled',due=?,snoozed=0,revision=revision+1,updated=? WHERE id=?",
+                        (due, now, notification_id),
                     )
                 elif existing["state"] in ["cancelled", "completed"]:
                     db.execute(
@@ -179,6 +201,8 @@ class Scheduler:
                     .isoformat()
                 )
                 state = "ready" if row["day"] == today or row["snoozed"] else "expired"
+                if cutoff is not None and row["due"] <= cutoff:
+                    state = "expired"
                 db.execute(
                     "UPDATE reminder_jobs SET state=?,revision=revision+1,updated=? WHERE id=?",
                     (state, now, row["id"]),
@@ -284,6 +308,7 @@ def router(scheduler):
     @routes.get("/status")
     async def status():
         with scheduler.store.connect() as db:
+            automation = automation_state(db)
             has_device = (
                 db.execute(
                     "SELECT 1 FROM push_devices WHERE state='active' LIMIT 1"
@@ -291,6 +316,8 @@ def router(scheduler):
                 is not None
             )
         return {
+            "automationHeld": automation["held"],
+            "automationInvalid": automation["invalid"],
             "lastCheck": scheduler.last_check,
             "healthy": scheduler.last_error is None
             and scheduler.last_check is not None

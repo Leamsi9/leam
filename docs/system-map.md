@@ -12,6 +12,8 @@
 | Attachments | `leam_api/attachments.py`, `apps/web/src/attachments.tsx`; private bytes and receipt-bound references |
 | Voice | `apps/web/src/voice/`; shared dictation, correlated playback and device-local preferences |
 | State and recovery | `leam_api/store.py`, `backups.py`, `recovery.py`; SQLite state, private backups and separate recovery process |
+| Coordinated restore and rollout | `leam_api/mobile_restore.py`, `candidate_deployment.py`, `candidate_launch.py`, `candidate_rollout.py`, `restore_services.py`; protected descriptor and one operation lock |
+| Automation after restore | `leam_api/restore_automation.py`, worker callers and `apps/web/src/restore-automation.tsx`; explicit review before future work resumes |
 | Runtime adapter | `leam_api/ironclaw.py`; pinned loopback IronClaw execution |
 | Optional shared IDE session | `leam_api/shared_coding.py`, `shared_session*.py`, `shared_controls.py`, `shared_decisions.py` |
 | Engineering policy | `leam_api/coding_policy.py`, pinned `agent-protocols/` and lock |

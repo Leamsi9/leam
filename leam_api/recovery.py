@@ -7,8 +7,11 @@ import secrets
 import stat
 import time
 from collections import deque
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
@@ -16,6 +19,8 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
+
+from .operation_wait import settled
 
 # Operator-owned inventory: neither a request nor a model can supply a unit/command.
 SERVICES = {
@@ -25,10 +30,14 @@ SERVICES = {
 }
 COOKIE = "leam_recovery_session"
 ASSETS = Path(__file__).with_name("recovery_assets")
+COMMAND_TIMEOUT = 20
 
 
 class ServiceControl:
     async def _systemctl(self, *arguments):
+        return await settled(self._invoke(*arguments))
+
+    async def _invoke(self, *arguments):
         process = await asyncio.create_subprocess_exec(
             "/usr/bin/systemctl",
             "--user",
@@ -38,18 +47,43 @@ class ServiceControl:
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=20)
-        except TimeoutError:
-            process.kill()
-            await process.communicate()
-            raise HTTPException(
-                504, "Service operation timed out; inspect status before retrying"
-            )
-        if process.returncode != 0:
-            raise HTTPException(
-                503, "Candidate service manager could not complete this operation"
-            )
-        return stdout.decode("utf-8", errors="replace")[:8192]
+            result = asyncio.create_task(process.communicate())
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    asyncio.shield(result), timeout=COMMAND_TIMEOUT
+                )
+            except TimeoutError:
+                if arguments[0] in {"start", "stop", "restart"}:
+                    # Killing systemctl does not cancel the systemd job. Keep the
+                    # caller's operation lock until the manager client has settled.
+                    # A stuck manager requires operator intervention, not overlap.
+                    await result
+                else:
+                    process.kill()
+                    await result
+                raise HTTPException(
+                    504, "Service operation timed out; inspect status before retrying"
+                )
+            if process.returncode != 0:
+                raise HTTPException(
+                    503, "Candidate service manager could not complete this operation"
+                )
+            return stdout.decode("utf-8", errors="replace")[:8192]
+        except asyncio.CancelledError:
+            # Event-loop shutdown can cancel the shielded child task directly.
+            # Drain the real subprocess before propagating that cancellation,
+            # so outer operation locks cannot outlive only a cancelled Future.
+            # An uncancelled communicate task still owns the pipe readers.
+            while not result.done():
+                try:
+                    await asyncio.shield(result)
+                except asyncio.CancelledError:
+                    continue
+            if result.cancelled():
+                await settled(process.communicate())
+            else:
+                await settled(process.wait())
+            raise
 
     async def status(self):
         async def inspect(service_id, service):
@@ -132,7 +166,25 @@ class Setup(Login):
     bootstrap: SecretStr = Field(min_length=20, max_length=256)
 
 
-def create_recovery_app(directory: Path, origins: set[str], *, control=None):
+class RestorePreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    backupId: UUID
+
+
+class RestoreConfirm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    requestId: UUID
+    previewToken: str = Field(pattern=r"^[a-f0-9]{64}$")
+    confirmed: Literal[True]
+
+
+class RestoreStart(RestoreConfirm):
+    backupId: UUID
+
+
+def create_recovery_app(
+    directory: Path, origins: set[str], *, control=None, restore=None, deployment=None
+):
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = directory.lstat()
     if (
@@ -165,6 +217,7 @@ def create_recovery_app(directory: Path, origins: set[str], *, control=None):
     lock = asyncio.Lock()
     hasher = PasswordHasher()
     control = control or ServiceControl()
+    deployment = deployment or (restore.deployment if restore else None)
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     def signed_in(request):
@@ -314,10 +367,96 @@ def create_recovery_app(directory: Path, origins: set[str], *, control=None):
         rate_limit(actions, 6, 60)
         async with lock:
             try:
-                await control.operate(service_id, action)
+                # Restarting a writer mid-restore would invalidate the safety
+                # boundary. Share its cross-process lock even across browsers.
+                with deployment.lock() if deployment else nullcontext():
+                    await settled(control.operate(service_id, action))
+            except ValueError as error:
+                raise HTTPException(
+                    409, "A candidate restore or deployment is in progress"
+                ) from error
             except OSError as error:
                 raise HTTPException(503, "Service manager unavailable") from error
         return {"services": await control.status(), "checkedAt": time.time()}
+
+    def restore_required():
+        if restore is None:
+            raise HTTPException(
+                503, "Mobile restore has not been activated by the operator"
+            )
+        return restore
+
+    async def restore_call(function, *args):
+        try:
+            return await function(*args)
+        except FileNotFoundError as error:
+            raise HTTPException(
+                404, "Backup or restore receipt is unavailable"
+            ) from error
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        except OSError as error:
+            raise HTTPException(
+                503, "Restore storage is unavailable; inspect status before retrying"
+            ) from error
+
+    @app.get("/api/restores")
+    async def restore_status():
+        if restore is None:
+            return {"available": False, "backups": [], "history": []}
+        try:
+            listing = restore.listing()
+            return {
+                "available": True,
+                "backups": listing["items"],
+                "generationId": listing["generationId"],
+                "history": restore.history(),
+            }
+        except (OSError, ValueError):
+            raise HTTPException(
+                503, "Restore descriptor or local archives require operator review"
+            )
+
+    @app.post("/api/restores/preview")
+    async def restore_preview(body: RestorePreview):
+        rate_limit(actions, 6, 60)
+        return await restore_call(restore_required().preview, str(body.backupId))
+
+    @app.post("/api/restores", status_code=202)
+    async def restore_start(body: RestoreStart):
+        rate_limit(actions, 6, 60)
+        return await restore_call(
+            restore_required().start_restore,
+            str(body.requestId),
+            str(body.backupId),
+            body.previewToken,
+        )
+
+    @app.get("/api/restores/{request_id}")
+    async def restore_receipt(request_id: UUID):
+        try:
+            return restore_required().status(str(request_id))
+        except FileNotFoundError:
+            raise HTTPException(404, "Restore receipt is unavailable")
+
+    @app.post("/api/restores/{request_id}/rollback-preview")
+    async def rollback_preview(request_id: UUID):
+        rate_limit(actions, 6, 60)
+        return await restore_call(restore_required().rollback_preview, str(request_id))
+
+    @app.post("/api/restores/{request_id}/rollback", status_code=202)
+    async def rollback_start(request_id: UUID, body: RestoreConfirm):
+        rate_limit(actions, 6, 60)
+        return await restore_call(
+            restore_required().start_rollback,
+            str(body.requestId),
+            str(request_id),
+            body.previewToken,
+        )
+
+    @app.get("/restore.js")
+    async def restore_script():
+        return FileResponse(ASSETS / "restore.js", media_type="text/javascript")
 
     @app.get("/")
     async def index():
@@ -335,14 +474,37 @@ def create_recovery_app(directory: Path, origins: set[str], *, control=None):
 
 
 def application():
+    directory = Path(
+        os.environ.get(
+            "LEAM_RECOVERY_DIR", str(Path.home() / ".local/share/leam-next/recovery")
+        )
+    )
+    restore = None
+    deployment = None
+    # Adoption is explicit. Existing recovery installations keep their working
+    # service controls until the fixed-root descriptor has been reviewed/created.
+    from .candidate_deployment import CandidateDeployment, Roots
+
+    if (
+        directory == Roots.installed().recovery
+        and (directory / "candidate.json").exists()
+    ):
+        from .mobile_restore import RestoreController
+        from .restore_services import FixedRestoreServices
+
+        deployment = CandidateDeployment()
+        try:
+            restore = RestoreController(deployment, FixedRestoreServices(deployment))
+        except (OSError, ValueError):
+            # A corrupt journal or another active controller must not take the
+            # independent sign-in/status plane down. Mutation still takes the
+            # same deployment lock; restore remains unavailable for review.
+            restore = None
     return create_recovery_app(
-        Path(
-            os.environ.get(
-                "LEAM_RECOVERY_DIR",
-                str(Path.home() / ".local/share/leam-next/recovery"),
-            )
-        ),
+        directory,
         set(
             os.environ.get("LEAM_RECOVERY_ORIGINS", "http://127.0.0.1:46430").split(",")
         ),
+        restore=restore,
+        deployment=deployment,
     )

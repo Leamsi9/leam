@@ -157,6 +157,13 @@ export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
         Enable notifications on this device
       </button>
       {message && <p role="status">{message}</p>}
+      {status?.automationHeld && (
+        <p role="status">
+          {status.automationInvalid
+            ? "Push delivery paused: restore marker needs operator review"
+            : "Push delivery paused after restore; review in Settings → Backups"}
+        </p>
+      )}
       {status?.error && (
         <p role="alert">Push worker needs attention: {status.error}</p>
       )}
@@ -176,7 +183,7 @@ export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
           <div className="actions">
             <button
               className="secondary"
-              disabled={device.state !== "active"}
+              disabled={device.state !== "active" || !!status?.automationHeld}
               onClick={() =>
                 act(async () => {
                   await api(`/push/devices/${device.id}/test`, "POST", {});

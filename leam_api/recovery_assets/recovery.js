@@ -2,22 +2,32 @@
 const $ = (id) => document.getElementById(id);
 let configured = true;
 let busy = false;
+let authGeneration = 0;
+let authenticated = false;
+function authChanged(value) {
+  authenticated = value;
+  window.dispatchEvent(new CustomEvent("recovery-auth", {detail: value}));
+}
 function notice(message = "", error = false) {
   $("notice").textContent = message;
   $("notice").className = error ? "error" : "";
 }
 async function api(path, method = "GET", body) {
+  const generation = authGeneration;
   const response = await fetch(path, { method, credentials: "same-origin", cache: "no-store", headers: body === undefined ? {} : {"Content-Type": "application/json"}, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await response.json();
+  if (generation !== authGeneration) throw new Error("Recovery session changed; refresh status.");
   if (!response.ok) {
-    if (response.status === 401) { $("auth").hidden = false; $("dashboard").hidden = true; }
-    throw new Error(typeof data.detail === "string" ? data.detail : "Check the entered values and try again.");
+    if (response.status === 401) { authGeneration++; authChanged(false); $("auth").hidden = false; $("dashboard").hidden = true; }
+    const error = new Error(typeof data.detail === "string" ? data.detail : "Check the entered values and try again.");
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
 function disable(value) {
   busy = value;
-  document.querySelectorAll("button").forEach(button => { button.disabled = value; });
+  document.querySelectorAll("#login button, #services button, #refresh").forEach(button => { button.disabled = value; });
 }
 function showServices(data) {
   $("services").replaceChildren();
@@ -57,10 +67,11 @@ async function status() {
   $("sign-in").textContent = configured ? "Sign in to recovery" : "Pair recovery access";
   $("password").autocomplete = configured ? "current-password" : "new-password";
   $("password").minLength = configured ? 1 : 12;
+  authChanged(auth.authenticated);
   if (auth.authenticated) await refresh();
 }
 $("login").onsubmit = async (event) => {
-  event.preventDefault(); if (busy) return; disable(true); notice();
+  event.preventDefault(); if (busy) return; authGeneration++; disable(true); notice();
   try {
     const body = { password: $("password").value };
     if (!configured) body.bootstrap = $("code").value;
@@ -70,5 +81,5 @@ $("login").onsubmit = async (event) => {
   finally { disable(false); }
 };
 $("refresh").onclick = async () => { if (busy) return; disable(true); try { await refresh(); notice(); } catch(error) { notice(error.message, true); } finally { disable(false); } };
-$("logout").onclick = async () => { try { await api("/api/auth/logout", "POST", {}); await status(); notice(); } catch(error) { notice(error.message, true); } };
+$("logout").onclick = async () => { authGeneration++; authChanged(false); $("dashboard").hidden = true; try { await api("/api/auth/logout", "POST", {}); await status(); notice(); } catch(error) { notice(error.message, true); } };
 status().catch(error => notice(error.message, true));

@@ -400,7 +400,7 @@ export function RoutinesPanel({ fail }: Props) {
             </button>
             <button
               className="primary"
-              disabled={busy || !!pending}
+              disabled={busy || !!pending || !!status?.automationHeld}
               onClick={() => void run(item)}
             >
               Run now
@@ -411,13 +411,17 @@ export function RoutinesPanel({ fail }: Props) {
       <section className="card">
         <h3>Run history</h3>
         <p role="status">
-          {healthy
-            ? "Scheduler running"
-            : status?.error
-              ? "Scheduler needs attention"
-              : age !== null
-                ? "Scheduler heartbeat is stale; check the Leam service"
-                : "Waiting for scheduler heartbeat"}
+          {status?.automationHeld
+            ? status.automationInvalid
+              ? "Routines paused: restore marker needs operator review"
+              : "Routines paused after restore; review in Settings → Backups"
+            : healthy
+              ? "Scheduler running"
+              : status?.error
+                ? "Scheduler needs attention"
+                : age !== null
+                  ? "Scheduler heartbeat is stale; check the Leam service"
+                  : "Waiting for scheduler heartbeat"}
           {status?.lastCheck
             ? ` · Last check ${dateLabel(status.lastCheck)}`
             : ""}

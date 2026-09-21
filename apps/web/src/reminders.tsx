@@ -125,13 +125,17 @@ export function ReminderSettings({ fail }: Props) {
       </p>
       {status && (
         <p role="status">
-          {status.error
-            ? "Scheduler needs attention: " + status.error
-            : status.healthy
-              ? "Scheduler running"
-              : status.lastCheck
-                ? "Scheduler heartbeat is stale; check the Leam service"
-                : "Scheduler is starting; waiting for its first check"}{" "}
+          {status.automationHeld
+            ? status.automationInvalid
+              ? "Reminders paused: restore marker needs operator review"
+              : "Reminders paused after restore; review in Settings → Backups"
+            : status.error
+              ? "Scheduler needs attention: " + status.error
+              : status.healthy
+                ? "Scheduler running"
+                : status.lastCheck
+                  ? "Scheduler heartbeat is stale; check the Leam service"
+                  : "Scheduler is starting; waiting for its first check"}{" "}
           · Last check{" "}
           {status.lastCheck
             ? new Date(status.lastCheck * 1000).toLocaleString()

@@ -57,6 +57,7 @@ from .reminders import Scheduler
 from .reminders import router as reminders_router
 from .routine_events import EventInputs
 from .routine_events import router as event_inputs_router
+from .restore_automation import RestoreAutomation, router as restore_automation_router
 from .routines import Routines
 from .routines import router as routines_router
 from .shared_coding import SharedCoding
@@ -232,6 +233,9 @@ def create_app(
     domain_tools = DomainTools(proposals, directory, inspector)
     app.include_router(domain_tools_router(domain_tools))
     app.include_router(backups_router(Backups(store)))
+    app.include_router(
+        restore_automation_router(RestoreAutomation(store, scheduler_clock))
+    )
     app.include_router(calendar_router(calendars))
 
     @app.exception_handler(RequestValidationError)

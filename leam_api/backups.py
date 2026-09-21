@@ -57,6 +57,8 @@ def expected_schema():
                 )
             }
         AttachmentStore(store)
+        # Additive usage ledgers may be absent from earlier compatible snapshots.
+        required -= {"usage_admissions", "usage_observations", "usage_codex_cursors"}
         Backlog(store)
         Routines(store)
         Updates(store)
@@ -377,6 +379,9 @@ def restore(archive, destination, current_data):
             db.execute("PRAGMA journal_mode=DELETE")
             db.execute("DELETE FROM sessions")
             db.execute("DELETE FROM oauth_states")
+            from .restore_automation import KEY, hold_marker, write_setting
+
+            write_setting(db, KEY, hold_marker())
         manager = Backups(SimpleNamespace(path=current_data / "leam.sqlite3"))
         safety = manager.path(manager.create()["id"])
         fsync_directory(temporary)

@@ -11,6 +11,7 @@
 - [Attachments](architecture/attachments-contract.md): private bytes, upload limits and native inputs.
 - [Voice](architecture/voice-contract.md) and [mobile interaction](architecture/mobile-interaction.md): shared controls, playback and device limits.
 - [Context overview](architecture/context-overview-contract.md), [local MCP](architecture/local-mcp-contract.md) and [recovery](architecture/recovery-contract.md): inspection, confinement and operational controls.
-- [Runtime lock](architecture/runtime-lock.json): upstream and patched source identities; public artifact verification is a release gate.
+- [Coordinated restore](architecture/mobile-restore-contract.md): independent recovery, protected launch descriptor, explicit rollback, automation hold and operator rollout.
+- [Runtime lock](architecture/runtime-lock.json): upstream and patched public source identities; each installation records and verifies its own build artifact.
 
 Private installation plans, live transcripts and deployment evidence are not included. Future engineering plans belong under `docs/plans/` and follow the pinned protocols.
