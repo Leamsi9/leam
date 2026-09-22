@@ -102,18 +102,24 @@ self.addEventListener("push", (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch (_) {}
-  event.waitUntil(
+  const body = typeof payload.body === "string" ? payload.body.slice(0,500) : "You have a reminder. Open Leam to review it.";
+  const tag = typeof payload.tag === "string" && payload.tag ? payload.tag.slice(0,256) : "leam-reminder";
+  event.waitUntil(Promise.all([
     self.registration.showNotification("Leam", {
-      body:
-        typeof payload.body === "string"
-          ? payload.body
-          : "You have a reminder. Open Leam to review it.",
+      body,
       icon: "/leam-icon-192.png",
-      badge: "/favicon-32.png",
-      tag: typeof payload.tag === "string" ? payload.tag : "leam-reminder",
+      // Android masks this small badge; keep its background transparent.
+      badge: "/leam-notification-badge.svg",
+      tag,
       data: { url: "/?view=today" },
     }),
-  );
+    self.clients.matchAll({type:"window",includeUncontrolled:true}).then(windows => {
+      for (const client of windows) {
+        if (client.visibilityState === "visible" && new URL(client.url).origin === self.location.origin)
+          client.postMessage({type:"leam:push-notice",tag,body});
+      }
+    }),
+  ]));
 });
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();

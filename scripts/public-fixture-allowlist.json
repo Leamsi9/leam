@@ -1,0 +1,69 @@
+{
+  "purpose": "Exact reviewed synthetic credential matches in isolated HTTP/provider test fixtures; never permits keys in product code or arbitrary changes to fixture values.",
+  "matches": [
+    {
+      "path": "tests/test_accounts.py",
+      "sha256": "06022bda7616d32a1ae067eb193887b3c8e665a97d80f3ea8443944e74d8087e"
+    },
+    {
+      "path": "tests/test_accounts.py",
+      "sha256": "60e3dd47d2c5dc835928cfb2a669d4f05445f0d78f24fec8d7e5ca1e8e67daad"
+    },
+    {
+      "path": "tests/test_accounts.py",
+      "sha256": "88733847d300c5c1cfb1a93449791ad6962796673e4d8e3c57e382911e170bb8"
+    },
+    {
+      "path": "tests/test_accounts.py",
+      "sha256": "a92038cbe6690620c61629216ccb1431c2376efc48501defbd7cff7c140ccc56"
+    },
+    {
+      "path": "tests/test_agenda_email.py",
+      "sha256": "2d1b1a462cade3ef371a1a2e1887ac03ec166347a0b0ec915885419ed43d84fa"
+    },
+    {
+      "path": "tests/test_backup_email_compatibility.py",
+      "sha256": "30359cb6447ebe6960be95d7aa7cf58aaa33f403c63efc5102b99b68abff4b62"
+    },
+    {
+      "path": "tests/test_backup_email_compatibility.py",
+      "sha256": "40a27afa62785a40138ca6ac217a0034db2dfb3daf294cdafb199f4d4e7b7ad4"
+    },
+    {
+      "path": "tests/test_backup_email_compatibility.py",
+      "sha256": "587f63a6efee9eaff8c97647b2cbf46ebba3953cb66d6900b777790bccf6e7d0"
+    },
+    {
+      "path": "tests/test_backup_email_compatibility.py",
+      "sha256": "8a749866ad5b41471dca57eb3e37286047bf67ec622917321ce060c9e478cccf"
+    },
+    {
+      "path": "tests/test_companion.py",
+      "sha256": "abadf20f8886a6593a7413f2e815b1135edf28b3ae565090bfde00d7d9fca446"
+    },
+    {
+      "path": "tests/test_companion_stream.py",
+      "sha256": "0089e54bdb6785cdc911b6a2e0c40900a469944395e2ab21364befc114a7cc8e"
+    },
+    {
+      "path": "tests/test_mail_read.py",
+      "sha256": "ec58551ba831bee5890e80c14f0371936b7c4be2748689269fd71ad60c804cc4"
+    },
+    {
+      "path": "tests/test_maintenance.py",
+      "sha256": "0178521cd6394eb5c5afed7f1f8cea124b540d3def2b7755a64ffe0a7123e90a"
+    },
+    {
+      "path": "tests/test_mobile_restore.py",
+      "sha256": "0178521cd6394eb5c5afed7f1f8cea124b540d3def2b7755a64ffe0a7123e90a"
+    },
+    {
+      "path": "tests/test_recovery.py",
+      "sha256": "0178521cd6394eb5c5afed7f1f8cea124b540d3def2b7755a64ffe0a7123e90a"
+    },
+    {
+      "path": "tests/test_shared_coding_api.py",
+      "sha256": "78c571bad762a67f2c98f2edf22bb340a333bcb4d078e2f5d6db91dc7bb26b06"
+    }
+  ]
+}

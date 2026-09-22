@@ -7,7 +7,9 @@ export type CaptureEvent =
   | { type: "ended" }
   | { type: "error"; code?: string; message: string };
 export interface SpeechInput {
-  start(language: string, emit: (event: CaptureEvent) => void): void;
+  /** Safely finish and recycle a long-lived capture before adapter limits. */
+  readonly maxCaptureMs?: number;
+  start(language: string, emit: (event: CaptureEvent) => void, options?: { continuous?: boolean }): void;
   finish(): void;
   cancel(): void;
 }
@@ -39,6 +41,13 @@ export function recognitionAvailable() {
   );
 }
 let stopActiveInput: (() => void) | undefined;
+export function claimInput(cancel: () => void) {
+  stopRecognition();
+  stopActiveInput = cancel;
+  return () => {
+    if (stopActiveInput === cancel) stopActiveInput = undefined;
+  };
+}
 export function stopRecognition() {
   stopActiveInput?.();
 }
@@ -62,7 +71,7 @@ export function browserInput(): SpeechInput {
     }
   };
   return {
-    start(language, emit) {
+    start(language, emit, options) {
       cancel();
       const browser = window as SpeechWindow;
       const Constructor =
@@ -83,10 +92,23 @@ export function browserInput(): SpeechInput {
         });
       };
       session.lang = language;
-      session.continuous = false;
+      // Chromium Android converts provisional hypotheses to final results in
+      // continuous mode, so cumulative phrases can become separate final slots.
+      // Use one utterance per native capture there. Conversation owns bounded
+      // restart/concatenation; never deduplicate the user's spoken words.
+      const platform = navigator as Navigator & {
+        userAgentData?: { platform?: string };
+      };
+      const android = platform.userAgentData?.platform === "Android" ||
+        /Android/i.test(navigator.userAgent);
+      session.continuous = options?.continuous === true && !android;
       session.interimResults = true;
+      let started = false;
       session.onstart = () => {
-        if (current === session) emit({ type: "started" });
+        if (current === session && !started) {
+          started = true;
+          emit({ type: "started" });
+        }
       };
       session.onresult = (event) => {
         if (current !== session) return;
@@ -141,10 +163,12 @@ export function browserInput(): SpeechInput {
   };
 }
 export interface SpeechOutput {
+  /** Optional one-phrase synthesis lookahead; must not acquire or play audio. */
+  prepare?(text: string, language: string): void;
   speak(
     text: string,
     language: string,
-    emit: (state: "speaking" | "completed" | "cancelled" | "error") => void,
+    emit: (state: "speaking" | "completed" | "cancelled" | "error" | "blocked") => void,
     session?: symbol,
   ): void;
   pause(): boolean;
@@ -167,6 +191,13 @@ export function ownSpeechSession(stop: () => void) {
 export function stopSpeech(preserve?: symbol) {
   if (sessionOwner && sessionOwner.token !== preserve) sessionOwner.stop();
   stopActive?.();
+}
+export function claimOutput(cancel: () => void) {
+  stopActive?.();
+  stopActive = cancel;
+  return () => {
+    if (stopActive === cancel) stopActive = undefined;
+  };
 }
 export function browserOutput(): SpeechOutput {
   let generation = 0;

@@ -20,7 +20,7 @@ for (const width of [360, 390, 768, 1440]) {
     await page.goto("/");
     const nav = page.getByRole("navigation", { name: "Main navigation" });
     if (width <= 720) {
-      await expect(nav.getByRole("button")).toHaveCount(4);
+      await expect(nav.getByRole("button")).toHaveCount(5);
       for (const button of await nav.getByRole("button").all()) {
         const b = await button.boundingBox();
         expect(b!.width).toBeGreaterThanOrEqual(44);
@@ -40,7 +40,7 @@ for (const width of [360, 390, 768, 1440]) {
       await expect(dialog).not.toBeVisible();
       await expect(nav.getByRole("button", { name: /More/ })).toBeFocused();
     } else {
-      await expect(nav.getByRole("button")).toHaveCount(8);
+      await expect(nav.getByRole("button")).toHaveCount(10);
     }
     expect(
       await page.evaluate(

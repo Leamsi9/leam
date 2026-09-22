@@ -1,0 +1,27 @@
+/* Operational check records belong to Plan, never the chat transcript. */
+.today-reconciliation.contextual-checks {
+  padding: 0 12px;
+}
+.contextual-checks > .contextual-check-details {
+  margin: 0;
+}
+.contextual-check-details > summary {
+  min-height: 44px;
+  align-content: center;
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.contextual-check-details > summary > span + span {
+  margin-left: 7px;
+}
+.contextual-check-details > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.contextual-check-content {
+  padding-bottom: 8px;
+  font-size: 13px;
+}

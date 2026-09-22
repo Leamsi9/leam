@@ -1,0 +1,16 @@
+title = "Security-checked public publication"
+branch = "publication/audited-20260922"
+baseline = "98d2a4c"
+root_dir = "../.."
+phase_order = ["setup", "audit"]
+[phases.setup]
+[[phases.setup.checks]]
+id = "bound"
+type = "git_branch_worktree"
+current = true
+[phases.audit]
+depends_on = ["setup"]
+[[phases.audit.checks]]
+id = "security_privacy"
+type = "command"
+command = "python3 scripts/check-public-source.py --history"

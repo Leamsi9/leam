@@ -173,3 +173,79 @@ used in the shared list row, excluding turns. Auth and no-store apply. This endp
 starts no native RPC or IDE watch and can return while native session discovery is
 pending. Clients may fetch it independently and merge by thread ID; native catalog
 pagination, unavailable-state handling and existing rows must remain intact.
+
+## Main implementation coordinator
+
+`GET/PUT /api/coding/main` exposes a user-selected exact Codex thread ID, native or
+shared-owner transport, and compare-and-set revision in Leam's settings store.
+No thread is selected from its name or guessed from the current build. Selection
+validates native identity or the configured shared reference. Main is marked in
+Coding and protected from deletion, including ancestor deletion. Deliberate
+reassignment requires the displayed revision and does not stop prior work.
+
+`POST /api/coding/main/handoffs` is an explicit implementation action in Coding and
+Updates. It carries the selected Main identity/revision, UUID, source thread/ticket,
+user-entered task and at most 2000 characters of context. The server verifies source
+references and adds bounded ticket provenance; no transcript or model inference is
+used for routing. Companion's reviewed coding action also targets Main when selected;
+its review captures the exact Main reference. Without a Main selection, existing
+Companion dedicated-session behavior remains. Ordinary chat stays in its source.
+
+Main must already be explicitly connected for native execution. Native active turns
+receive `turn/steer` with the observed turn ID; idle turns use `turn/start`. Shared
+Main goes through the current owner/generation adapter, never native resume or rollout
+writes. Existing dispatch callers retain pinned protocol validation and idempotent
+receipts. Selection and handoff dispatch serialize; receipts retain their original
+target across reassignment. Retrying the same handoff only reads its underlying
+receipt; unknown outcomes are never automatically dispatched again.
+`GET /api/coding/main/handoffs/{requestId}` reports accepted, uncertain, not_sent or
+not_recorded. Accepted means admitted to Codex (possibly an active-turn follow-up),
+not implementation completion or a separate queued job. A saved browser intent uses
+private session storage and is cleared on sign-out.
+
+Secondary sessions receive instructions to discuss/inspect/propose and ask for an
+explicit Main handoff before implementation, integration or deployment. Main may
+coordinate bounded parallel workers through its existing native delegation tools;
+there is no Leam worker-grant API and source text confers no privilege. This is an
+instruction policy, **not a permission sandbox**. Active native steering cannot
+change permissions, shared-owner permissions are outside this adapter, and native
+filesystem read-only settings alone do not prove MCP/custom-tool safety. Universal
+execution/deployment enforcement remains follow-up work; no tool grant or host
+configuration is changed by selecting Main. The UI explains this in collapsed help.
+An explicit `POST /api/coding/main/handoffs/{requestId}/reconcile` checks the existing
+native/shared exact-message reconciliation caller using the saved submitted task;
+it never resends. A changed original owner transport blocks reconciliation rather
+than falling back to native ownership. Only the handoff task is persisted, not its
+source conversation transcript.
+
+## Explicit model changes in composers
+
+The shared composer exposes a compact Model and reasoning dialog, including ticket
+chats. `GET /api/codex/threads/{id}/model` reports the exact thread's configured
+`model`, `reasoningEffort`, `generation` and `connected` status. Missing settings
+stay unknown, not inferred from new-session defaults. The authenticated,
+Origin-protected POST takes model/effort, displayed generation, expectedModel and
+expectedReasoningEffort. Only already-connected sessions are writable. Validation
+uses the bounded live catalog, then rechecks ownership/configuration after I/O.
+
+Native changes use installed experimental `thread/settings/update` with only
+threadId/model/effort and generation fencing under the session lock. Shared IDE
+changes use version-pinned `thread-follower-update-thread-settings` v2 with exact
+owner and conditional old-model/effort checks. activeTurnId is omitted so the
+owner updates subsequent-turn settings rather than live permissions. No implicit
+resume, new thread, global config, permission change or default fallback occurs.
+The owner may maintain next-turn settings locally when its older native app server
+does not implement the experimental method; this is the owner's existing behavior.
+
+Acknowledgment (`accepted`) and canonical observed configuration (`confirmed`)
+remain separate. Unknown delivery/readback requires refresh and never triggers an
+automatic repeat. Running replies keep their current model. Native bindings cannot
+atomically exclude edits made by an unrelated external writer; the existing explicit
+handoff/exclusive-owner contract remains necessary. Shared owner conditions are
+checked by the pinned owner itself.
+
+Companion/Today/Goals composer controls explicitly label their existing provider
+selection as shared defaults for future requests, not per-thread overrides. Models
+and efforts come from the actual account catalog. Providers without an exposed
+catalog remain configurable through the existing Settings UI. Dialogs fetch on
+opening and preserve drafts; routine chat renders add no model-catalog polling.

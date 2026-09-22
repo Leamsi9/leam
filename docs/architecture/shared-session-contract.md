@@ -150,7 +150,7 @@ canonical latest-window resolution, text bounds and confirmed steering deduplica
 
 ## Leam API and mobile integration
 
-`SharedCoding` owns exactly the configured IDE-owner thread and maintains one lazy
+`SharedCoding` owns exactly the original build thread and maintains one lazy
 background follower for all browser clients. Renewals revalidate the installed
 pins and owner. Genuine disconnects invalidate the binding, report stale read state,
 and retry with a five-second backoff. The intentional five-minute read lease renews

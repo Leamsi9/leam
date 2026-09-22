@@ -1,3 +1,11 @@
+import { currentResponseRun } from "./companion-current-run";
+import { LazySettingsSection } from "./settings-lifecycle";
+import { ModelRecoveryNotice } from "./model-recovery";
+import { receiptHistory, keepReceiptIdentity, updateReceiptHistory, type SavedReceipt } from "./companion-recovery";
+import { ChatDialog } from "./chat-dialog";
+import { Plus, ArrowUp } from "lucide-react";
+import { ArtifactLink } from "./artifacts";
+import { ProcedurePicker, type ProcedureSelection } from "./procedures";
 import { deliveryReceipt, queuedNotice } from "./companion-delivery";
 import {
   cachedChat,
@@ -8,16 +16,21 @@ import {
   forgetChat,
 } from "./session-cache";
 import { useEffect, useState, useRef } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import { documentLink } from "./document-links";
 import remarkGfm from "remark-gfm";
-import { api, chatRead, type Data } from "./api";
+import { api, ApiError, chatRead, type Data } from "./api";
 import { useChatScroll } from "./chat-scroll";
 import { AttachmentComposer, useAttachmentDraft } from "./attachments";
 import { ConversationList } from "./conversation-list";
 import { CodingModelSettings } from "./coding-model-settings";
 import { ProposalList } from "./proposals";
+import { approvalsChanged } from "./approvals-status";
 import { MemoryApprovalSettings } from "./memory-approval";
-import { useCompanionStream } from "./companion-stream";
+import { useCompanionStream, type LiveRun } from "./companion-stream";
+import { RuntimeApproval } from "./runtime-approval";
+import { BackgroundWork } from "./background-jobs";
+import { companionTimeline } from "./companion-timeline";
 import { ReadAloud } from "./voice/controls";
 import { VoiceComposer } from "./voice/composer";
 import { stopConversation, type Receipt } from "./voice/conversation";
@@ -308,8 +321,7 @@ export function MemorySettings({ fail }: Props) {
     [editing, setEditing] = useState<Data | null>(null),
     [text, setText] = useState(""),
     [source, setSource] = useState("Told directly by me"),
-    [saving, setSaving] = useState(false),
-    [activityOpen, setActivityOpen] = useState(false);
+    [saving, setSaving] = useState(false);
   const load = () =>
     api("/memory")
       .then((r) => setItems(r.items || []))
@@ -327,15 +339,9 @@ export function MemorySettings({ fail }: Props) {
         copies.
       </p>
       <MemoryApprovalSettings fail={fail} />
-      <details
-        className="settings-section"
-        onToggle={(e) => setActivityOpen(e.currentTarget.open)}
-      >
-        <summary>Memory suggestions and activity</summary>
-        {activityOpen && (
-          <ProposalList memoryOnly fail={fail} onChanged={load} />
-        )}
-      </details>
+      <LazySettingsSection title="Memory suggestions and activity">
+        <ProposalList memoryOnly fail={fail} onChanged={load} />
+      </LazySettingsSection>
       <details className="settings-section" open={Boolean(editing)}>
         <summary>{editing ? "Edit memory" : "Add a memory"}</summary>
         <form
@@ -427,10 +433,12 @@ export function MemorySettings({ fail }: Props) {
   );
 }
 
-export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThread?: string; onChanged?: () => void }) {
+export function Companion({ fail, fixedThread, onChanged, procedures = false, onExchangeActivity }: Props & { fixedThread?: string; onChanged?: () => void; procedures?: boolean; onExchangeActivity?: (threadId: string) => void }) {
+  const [procedure, setProcedure] = useState<ProcedureSelection | null>(null);
   const initialId = useRef(fixedThread || sessionValue("companion:selected", "")).current;
   const initial = cachedChat("companion:" + initialId);
   const [system, setSystem] = useState<Data | null>(null);
+  const [rejectedDraftNotice, setRejectedDraftNotice] = useState<{ threadId: string; messageId: string; text: string } | null>(null);
   const [threads, setThreads] = useState<Data[]>(
       () => cachedChat("companion:threads")?.threads || [],
     ),
@@ -446,13 +454,16 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
   const chatScroll = useChatScroll(thread);
   const files = useAttachmentDraft("companion:" + thread);
   const [uploading, setUploading] = useState(false);
+  const composerInput = useRef<HTMLTextAreaElement | null>(null);
   const [stoppingRun, setStoppingRun] = useState("");
+  const [acceptedRun, setAcceptedRun] = useState<{thread: string; id: string; afterSequence: number} | null>(null);
+  const stopTarget = useRef<LiveRun | null>(null);
   const submitting = useRef(false);
   const olderLoaded = useRef(Boolean(initial?.olderLoaded));
   const refreshSequence = useRef(0);
   const validatedAt = useRef(initial?.validatedAt || 0);
   const selected = useRef(initialId),
-    attempt = useRef<{ thread: string; text: string; id: string; attachmentIds?: string[] } | null>(null);
+    attempt = useRef<{ thread: string; text: string; id: string; attachmentIds?: string[]; procedure?: ProcedureSelection | null } | null>(null);
   const [threadCursor, setThreadCursor] = useState<string | null>(
     () => cachedChat("companion:threads")?.nextCursor || null,
   );
@@ -553,9 +564,16 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
     }
   }
   const live = useCompanionStream(thread, () => {
-    if (selected.current === thread) void refresh(thread).catch(fail);
+    if (selected.current === thread) {
+      void refresh(thread).catch(fail);
+      onExchangeActivity?.(thread);
+      approvalsChanged();
+    }
   });
+  const currentRun = currentResponseRun(messages, live.runs, acceptedRun?.thread === thread ? acceptedRun : undefined);
+  stopTarget.current = currentRun;
   async function stopRun(runId: string) {
+    if (selected.current !== thread || stopTarget.current?.id !== runId || stoppingRun) return;
     const ownerThread = thread;
     const key = `leam-companion-stop:${ownerThread}:${runId}`;
     const requestId = sessionStorage.getItem(key) || crypto.randomUUID();
@@ -579,10 +597,47 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
     }
   }
   const [deliveryNotice, setDeliveryNotice] = useState("");
+  const [savedReceipts, setSavedReceipts] = useState<SavedReceipt[]>(() => receiptHistory(initialId));
+  const [checkingReceipt, setCheckingReceipt] = useState("");
+  const receiptChecks = useRef(new Set<string>());
+  function releaseForEditing() {
+    const pending = attempt.current;
+    if (!pending || busy || !window.confirm("This message may already have been delivered. Keep editing preserves your text and attachments, but sending an edited message creates a new request and may duplicate earlier work. Continue?")) return;
+    try {
+      const rows = keepReceiptIdentity(pending.thread, pending.id);
+      sessionStorage.removeItem("leam-companion-submission:" + pending.thread);
+      setSavedReceipts(rows);
+      attempt.current = null;
+      setDeliveryNotice("Editing unlocked. Your draft and attachments are kept. The earlier receipt remains in chat options; its delivery is still unconfirmed.");
+    } catch (error) {
+      setDeliveryNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+  async function checkPreviousReceipt(row: SavedReceipt) {
+    if (receiptChecks.current.has(row.id)) return;
+    receiptChecks.current.add(row.id);
+    setCheckingReceipt(row.id);
+    let notice = "Receipt unavailable. Delivery remains unconfirmed.", confirmed = false;
+    try {
+      const saved = await api(`/companion/threads/${encodeURIComponent(row.thread)}/submissions/${encodeURIComponent(row.id)}`);
+      confirmed = saved.state === "recorded" && !!deliveryReceipt(saved.receipt || {}, row.thread);
+      notice = confirmed ? "Delivery confirmed" : saved.state === "pending" ? "Receipt pending. Delivery remains unconfirmed." : "No confirmed receipt found. The message may still have been delivered.";
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) notice = "Receipt not found. This does not prove the message was not delivered.";
+    }
+    finally {
+      receiptChecks.current.delete(row.id);
+      if (selected.current === row.thread) {
+        setCheckingReceipt("");
+        try { setSavedReceipts(updateReceiptHistory(row.thread, row.id, { notice, confirmed })); }
+        catch { setDeliveryNotice("Could not save the receipt check. The earlier identity is retained."); }
+      }
+    }
+  }
   function acceptDelivery(
     accepted: Data,
     id: string,
-    submission: { thread: string; text: string; id: string; attachmentIds?: string[] },
+    submission: { thread: string; text: string; id: string; attachmentIds?: string[]; procedure?: ProcedureSelection | null },
   ): Receipt {
     const receipt = deliveryReceipt(accepted, id);
     if (!receipt) {
@@ -594,7 +649,7 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
         if (selected.current === id && attempt.current?.id === submission.id) {
           attempt.current = null;
           setDeliveryNotice(
-            "This message was not sent because Leam is busy. Your draft is kept. Wait for the current response, then send it explicitly.",
+            "Leam is busy and did not accept this message. Your draft and attachments are kept. Wait for the current response, then send explicitly.",
           );
         }
         throw new Error(
@@ -609,30 +664,47 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
     clearAcceptedDraft("companion", id, submission.text);
     files.clear(submission.attachmentIds || []);
     if (selected.current === id && attempt.current?.id === submission.id) {
+      setAcceptedRun({thread: id, id: receipt.run_id, afterSequence: Math.max(-1, ...messages.filter(message => Number.isSafeInteger(message.sequence)).map(message => message.sequence))});
       live.accepted(receipt.run_id);
+      setProcedure(null);
       attempt.current = null;
       setText((current) => (current === submission.text ? "" : current));
       setDeliveryNotice(
         receipt.outcome === "deferred_busy" ? queuedNotice : "",
       );
     }
+    onExchangeActivity?.(id);
+    approvalsChanged();
     void Promise.all([refresh(id), load()]).catch(fail);
     return receipt;
   }
   async function reconcileSubmission(
     id: string,
-    submission: { thread: string; text: string; id: string; attachmentIds?: string[] },
+    submission: { thread: string; text: string; id: string; attachmentIds?: string[]; procedure?: ProcedureSelection | null },
   ) {
+    if (receiptChecks.current.has(submission.id)) return;
+    receiptChecks.current.add(submission.id);
+    setCheckingReceipt(submission.id);
     try {
       const saved = await api(
         `/companion/threads/${encodeURIComponent(id)}/submissions/${encodeURIComponent(submission.id)}`,
       );
-      if (selected.current !== id || attempt.current?.id !== submission.id)
-        return;
-      if (saved.state === "recorded" && saved.receipt)
+      if (selected.current !== id || attempt.current?.id !== submission.id) return;
+      if (saved.state === "recorded" && saved.receipt) {
         acceptDelivery(saved.receipt, id, submission);
-    } catch {
-      // Missing/pending/unavailable receipts retain the saved action. Never replay automatically.
+      } else {
+        setDeliveryNotice(saved.state === "pending"
+          ? "Receipt pending. Delivery remains unconfirmed; nothing has been resent."
+          : "No confirmed receipt found. This does not prove the message was not delivered.");
+      }
+    } catch (error) {
+      if (selected.current === id && attempt.current?.id === submission.id)
+        setDeliveryNotice(error instanceof ApiError && error.status === 404
+          ? "Receipt not found. Delivery remains unconfirmed; this does not prove the message was not delivered."
+          : "Receipt unavailable. Delivery remains unconfirmed; nothing has been resent.");
+    } finally {
+      receiptChecks.current.delete(submission.id);
+      if (selected.current === id) setCheckingReceipt("");
     }
   }
   async function submitText(value: string): Promise<Receipt> {
@@ -648,22 +720,38 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
         "A previous message has an uncertain outcome. Review that message before sending another.",
       );
     submitting.current = true;
+    chatScroll.follow();
     setBusy(true);
+    let dispatched = false;
+    let submission = attempt.current;
     try {
-      attempt.current ||= { thread: id, text: value, id: crypto.randomUUID(), attachmentIds: files.ids };
-      const submission = attempt.current;
+      attempt.current ||= { thread: id, text: value, id: crypto.randomUUID(), attachmentIds: files.ids, procedure };
+      submission = attempt.current;
       setDeliveryNotice("");
       sessionStorage.setItem(
         "leam-companion-submission:" + id,
         JSON.stringify(submission),
       );
       setText(value);
+      dispatched = true;
       const accepted = await api(
         "/companion/threads/" + encodeURIComponent(id) + "/messages",
         "POST",
-        { text: submission.text, requestId: submission.id, attachmentIds: submission.attachmentIds || [] },
+        { text: submission.text, requestId: submission.id, attachmentIds: submission.attachmentIds || [], ...(submission.procedure ? {procedure: submission.procedure} : {}) },
       );
       return acceptDelivery(accepted, id, submission);
+    } catch (error) {
+      if (submission && selected.current === id && attempt.current?.id === submission.id) {
+        if (!dispatched || (error instanceof ApiError && error.actionReserved === "no")) {
+          sessionStorage.removeItem("leam-companion-submission:" + id);
+          attempt.current = null;
+          setDeliveryNotice("Not sent. " + (error instanceof Error ? error.message : "Request rejected before dispatch.") + " Your draft and attachments are kept; you can edit or send explicitly.");
+        } else {
+          setDeliveryNotice("Message delivery is uncertain. Your draft and attachments are kept. Checking its receipt without resending…");
+          void reconcileSubmission(id, submission);
+        }
+      }
+      throw error;
     } finally {
       submitting.current = false;
       setBusy(false);
@@ -674,6 +762,8 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
     setStoppingRun("");
     setUploading(false);
     setDeliveryNotice("");
+    setCheckingReceipt("");
+    setSavedReceipts(receiptHistory(id));
     if (!fixedThread) rememberSession("companion:selected", id);
     const item = threads.find((item) => item.thread_id === id);
     if (!fixedThread && (item || !id)) rememberSession("companion:selectedItem", item || null);
@@ -690,6 +780,7 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
     } catch {
       attempt.current = null;
     }
+    setProcedure(attempt.current?.procedure || null);
     setText(
       sessionValue<string | null>("companion:draft:" + id, null) ??
         attempt.current?.text ??
@@ -757,9 +848,153 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
     if (thread && selected.current === thread)
       rememberSession("companion:draft:" + thread, text);
   }, [thread, text]);
+  const renderMessage = (m: Data) => (
+<article
+                    key={`${thread}:${m.message_id}`}
+                    id={`companion-message-${m.message_id}`}
+                    className={
+                      "message " + (m.kind === "user" ? "user" : "assistant")
+                    }
+                  >
+                    <span className="message-label">
+                      {m.kind === "user" ? "YOU" : "LEAM"} · {m.status}
+                    </span>
+                    {m.leamAttachments?.length > 0 && (
+                      <ul aria-label="Message attachments">
+                        {m.leamAttachments.map((a: Data) => (
+                          <li key={a.id}>
+                            <>{a.state === "deleted" ? <span className="attachment-deleted">{a.filename} · Attachment deleted</span> : <a href={"/api/attachments/" + encodeURIComponent(a.id)} download={a.filename}>{a.filename}</a>}</>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="prose markdown">
+                      <ReactMarkdown
+                        components={{ a: ({ node: _node, ...props }) => <ArtifactLink {...props} /> }}
+                        remarkPlugins={[remarkGfm]}
+                        urlTransform={(url, key) =>
+                          key === "href" ? documentLink(url, thread) : defaultUrlTransform(url)
+                        }
+                      >
+                        {m.content || ""}
+                      </ReactMarkdown>
+                    </div>
+                  {m.kind === "user" && m.status === "rejected_busy" && (
+                    <div aria-label="Unprocessed message">
+                      <p role="status">This saved message was not processed. Use it as a draft to send it again.</p>
+                      <button type="button" className="secondary" disabled={busy || uploading || !!attempt.current} onClick={() => {
+                        if (selected.current !== thread || busy || uploading || attempt.current || !messages.some(message => message.message_id === m.message_id && message.kind === "user" && message.status === "rejected_busy")) return;
+                        let notice: string;
+                        if (text.trim() || files.items.length) {
+                          notice = "Your existing draft and attachments are preserved. Review them before replacing anything; nothing was sent.";
+                        } else if (typeof m.content !== "string" || !m.content.trim()) {
+                          notice = "There is no message text to restore." + (m.leamAttachments?.length || m.attachments?.length ? " Review and reattach any original files before sending." : "");
+                        } else {
+                          stopConversation();
+                          stopRecognition();
+                          setText(m.content);
+                          notice = "Text copied to your draft. Review it before pressing Send; nothing was sent." + (m.leamAttachments?.length || m.attachments?.length ? " Original files are not restored—review and reattach any needed files." : "");
+                        }
+                        setRejectedDraftNotice({ threadId: thread, messageId: m.message_id, text: notice });
+                        composerInput.current?.focus();
+                      }}>Use as draft</button>
+                      {rejectedDraftNotice?.threadId === thread && rejectedDraftNotice.messageId === m.message_id && <p role="status">{rejectedDraftNotice.text}</p>}
+                    </div>
+                  )}
+                  {m.kind === "assistant" && m.content && (
+                    <ReadAloud
+                      text={m.content}
+                      final={m.status === "finalized"}
+                      target={{
+                        module: "companion",
+                        threadId: thread,
+                        runId: m.turn_run_id,
+                        messageId: m.message_id,
+                      }}
+                    />
+                  )}
+                  </article>
+  );
+  const renderRun = (run: LiveRun) => (
+<article
+                    key={`${thread}:run:${run.id}`}
+                    data-run-id={run.id}
+                    className="message assistant"
+                    aria-label="Live companion response"
+                  >
+                    <span className="message-label">
+                      LEAM ·{" "}
+                      {run.terminal
+                        ? run.failed
+                          ? "Stopped"
+                          : "Saving response"
+                        : run.approvalId ? "Waiting for approval" : "Responding"}
+                    </span>
+                    <p role="status">
+                      <em>
+                        {run.stopRequested ? "Stop requested…" : run.approvalId ? "Review the operation below to continue." : run.status}
+                      </em>
+                    </p>
+                    {run.approvalId && !run.terminal && <RuntimeApproval
+                      key={`${thread}:${run.id}:${run.approvalId}`}
+                      threadId={thread} runId={run.id} approvalId={run.approvalId}
+                      resolved={(status, outcome) => live.approvalResolved(run.id, status, outcome)}
+                    />}
+                    {(run.recovery || run.terminalStatus === "failed") &&
+                      messages.filter((message) => message.kind === "user").at(-1)?.turn_run_id === run.id && <ModelRecoveryNotice
+                      key={`${thread}:${run.id}:recovery`}
+                      threadId={thread}
+                      runId={run.id}
+                      recovery={run.recovery}
+                      terminal={run.terminal}
+                      failed={run.terminalStatus === "failed"}
+                      prepareRetry={run.terminal && run.terminalStatus === "failed" &&
+                        messages.filter((message) => message.kind === "user").at(-1)?.turn_run_id === run.id &&
+                        !live.runs.some((other) => !other.terminal) ? () => {
+                          if (selected.current !== thread || busy || attempt.current) return "Wait until the current submission is resolved.";
+                          if (text.trim() || files.items.length) {
+                            composerInput.current?.focus();
+                            return "Your existing draft and attachments are preserved. Edit or send them explicitly; nothing was resent.";
+                          }
+                          const original = messages.filter((message) => message.kind === "user" && message.turn_run_id === run.id).at(-1);
+                          if (!original || typeof original.content !== "string") return "The original request is unavailable. Write a new message in the composer.";
+                          stopConversation();
+                          stopRecognition();
+                          setText(original.content);
+                          composerInput.current?.focus();
+                          return "Request copied to your draft. Review the text and any attachments before pressing Send; nothing was resent.";
+                        } : undefined}
+                    />}
+                    {run.text && (
+                      <div className="prose markdown">
+                        <ReactMarkdown
+                        components={{ a: ({ node: _node, ...props }) => <ArtifactLink {...props} /> }}
+                        remarkPlugins={[remarkGfm]}
+                        urlTransform={(url, key) =>
+                          key === "href" ? documentLink(url, thread) : defaultUrlTransform(url)
+                        }
+                      >
+                          {run.text}
+                        </ReactMarkdown>
+                      </div>
+                    )}
+                  {run.text && (
+                    <ReadAloud
+                      text={run.text}
+                      final={!!run.textFinal && !run.failed}
+                      target={{
+                        module: "companion",
+                        threadId: thread,
+                        runId: run.id,
+                      }}
+                    />
+                  )}
+                  </article>
+  );
   return (
     <section
       className={`page companion-page ${thread ? "has-conversation" : ""}`}
+      data-has-exchanges={messages.length > 0 || live.runs.length > 0 || busy || !!attempt.current || acceptedRun?.thread === thread}
     >
       {!thread && (
         <header className="chat-empty-heading">
@@ -769,12 +1004,8 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
           </p>
         </header>
       )}
-      <small aria-label="Companion model">
-        {system?.available
-          ? `Configured model: ${system.activeModel.model} · ${system.activeModel.reasoning_effort || "provider default"} reasoning`
-          : "Model configuration unavailable"}
-      </small>
-      {!fixedThread && <div className="actions chat-thread-controls">
+      <div className="chat-toolbar" aria-label="Companion chat controls">
+      {!fixedThread && <>
         <ConversationList
           kind="companion"
           items={threads}
@@ -787,7 +1018,8 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
           onChanged={changedConversation}
         />
         <button
-          className="secondary"
+          className="icon-button"
+          aria-label="New conversation" title="New conversation"
           onClick={async () => {
             try {
               const r = await api("/companion/threads", "POST", {
@@ -800,20 +1032,37 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
             }
           }}
         >
-          New conversation
+          <Plus size={20} aria-hidden="true" />
         </button>
-      </div>}
+      </>}
+        {thread && <BackgroundWork threadId={thread} draft={text} />}
+        <ChatDialog label="Companion chat options">
+      <small aria-label="Companion model">
+        {system?.available
+          ? `Configured model: ${system.activeModel.model} · ${system.activeModel.reasoning_effort || "provider default"} reasoning`
+          : "Model configuration unavailable"}
+      </small>
+          <p>Updated {fresh || "…"} · {live.connection}</p>
+          {!!savedReceipts.length && <details className="receipt-history"><summary>Earlier message receipts ({savedReceipts.length}/8)</summary>
+            {savedReceipts.map(row => <div key={row.id}>
+              <code>{row.id}</code><p>{row.notice}</p>
+              <button type="button" className="secondary" disabled={!!checkingReceipt} onClick={() => void checkPreviousReceipt(row)}>Check earlier receipt</button>
+              {row.confirmed && <button type="button" className="secondary" onClick={() => { try { setSavedReceipts(updateReceiptHistory(thread, row.id, null)); } catch { setDeliveryNotice("Could not remove the confirmed receipt."); } }}>Remove confirmed receipt</button>}
+            </div>)}
+          </details>}
+
+            {procedures && <ProcedurePicker value={procedure} disabled={busy || !!attempt.current} change={(choice) => { setProcedure(choice); if (choice && !text.trim()) setText(choice.id === "what-now" ? "What should I do now?" : "I feel overloaded. Help me choose one manageable next step."); }} />}
+        </ChatDialog>
+      </div>
       {thread ? (
         <>
-          <small>
-            Updated {fresh || "…"} · {live.connection}
-          </small>
+          {live.connection !== "Live progress connected" && live.connection !== "Connecting to live progress…" && <small className="chat-connection-notice" role="status">{live.connection}</small>}
           <div
             className="companion-messages"
             ref={chatScroll.viewport}
             onScroll={chatScroll.onScroll}
           >
-            <div ref={chatScroll.content}>
+            <div className="companion-transcript" ref={chatScroll.content}>
               {cursor && (
                 <button
                   className="secondary"
@@ -849,153 +1098,20 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
                   Earlier messages
                 </button>
               )}
-              {messages
-                .filter((m) => ["user", "assistant"].includes(m.kind))
-                .map((m) => (
-                  <article
-                    key={`${thread}:${m.message_id}`}
-                    id={`companion-message-${m.message_id}`}
-                    className={
-                      "message " + (m.kind === "user" ? "user" : "assistant")
-                    }
-                  >
-                    <span className="message-label">
-                      {m.kind === "user" ? "YOU" : "LEAM"} · {m.status}
-                    </span>
-                    {m.leamAttachments?.length > 0 && (
-                      <ul aria-label="Message attachments">
-                        {m.leamAttachments.map((a: Data) => (
-                          <li key={a.id}>
-                            <a href={"/api/attachments/" + encodeURIComponent(a.id)} download={a.filename}>{a.filename}</a>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    <div className="prose markdown">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {m.content || ""}
-                      </ReactMarkdown>
-                    </div>
-                  {m.kind === "assistant" && m.content && (
-                    <ReadAloud
-                      text={m.content}
-                      final={m.status === "finalized"}
-                      target={{
-                        module: "companion",
-                        threadId: thread,
-                        runId: m.turn_run_id,
-                        messageId: m.message_id,
-                      }}
-                    />
-                  )}
-                  </article>
-                ))}
-              {busy && (
-                <p role="status">
-                  <em>Sending your message…</em>
-                </p>
-              )}
-              {live.runs
-                .filter(
-                  (run) =>
-                    !messages.some(
-                      (message) =>
-                        message.kind === "assistant" &&
-                        message.turn_run_id === run.id &&
-                        (message.content === run.text || !run.text),
-                    ),
-                )
-                .map((run) => (
-                  <article
-                    key={run.id}
-                    className="message assistant"
-                    aria-label="Live companion response"
-                  >
-                    <span className="message-label">
-                      LEAM ·{" "}
-                      {run.terminal
-                        ? run.failed
-                          ? "Stopped"
-                          : "Saving response"
-                        : "Responding"}
-                    </span>
-                    <p role="status">
-                      <em>
-                        {run.stopRequested ? "Stop requested…" : run.status}
-                      </em>
-                    </p>
-                    {!run.terminal && (
-                      <button
-                        className="secondary"
-                        disabled={!!stoppingRun || run.stopRequested}
-                        onClick={() => void stopRun(run.id)}
-                      >
-                        {stoppingRun === run.id
-                          ? "Requesting stop…"
-                          : "Stop response"}
-                      </button>
-                    )}
-                  {run.text && (
-                    <ReadAloud
-                      text={run.text}
-                      final={!!run.textFinal && !run.failed}
-                      target={{
-                        module: "companion",
-                        threadId: thread,
-                        runId: run.id,
-                      }}
-                    />
-                  )}
-                    {run.text && (
-                      <div className="prose markdown">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {run.text}
-                        </ReactMarkdown>
-                      </div>
-                    )}
-                  </article>
-                ))}
-              <ProposalList key={thread} threadId={thread} fail={fail} onChanged={onChanged} />
-              {deliveryNotice && (
-                <p className="notice" role="status">
-                  {deliveryNotice}
-                </p>
-              )}
-              {attempt.current && !busy && (
-                <div className="notice">
-                  A saved message is awaiting confirmation. Sending again uses
-                  its original action ID.
-                  <button
-                    className="secondary"
-                    onClick={() => {
-                      if (attempt.current)
-                        void reconcileSubmission(thread, attempt.current);
-                    }}
-                  >
-                    Check saved receipt
-                  </button>
-                  <button
-                    className="secondary"
-                    onClick={() => {
-                      if (
-                        !window.confirm(
-                          "Set this draft aside? This does not cancel or undo a message already received by Leam.",
-                        )
-                      )
-                        return;
-                      sessionStorage.removeItem(
-                        "leam-companion-submission:" + thread,
-                      );
-                      attempt.current = null;
-                      setText("");
-                    }}
-                  >
-                    Set draft aside
-                  </button>
-                </div>
-              )}
+              {companionTimeline(messages, live.runs).map(entry => entry.kind === "message"
+                ? renderMessage(entry.message)
+                : renderRun(entry.run))}
+              {busy && <p role="status"><em>Sending your message…</em></p>}
             </div>
           </div>
+          {(deliveryNotice || attempt.current) && <aside className="companion-delivery-recovery" aria-label="Message delivery recovery">
+            <p role="status">{deliveryNotice || "A saved message has an unconfirmed delivery outcome."}</p>
+            {attempt.current && <div className="actions">
+              <button type="button" className="secondary" disabled={busy || !!checkingReceipt} onClick={() => { if (attempt.current) void reconcileSubmission(thread, attempt.current); }}>{checkingReceipt ? "Checking receipt…" : "Check saved receipt"}</button>
+              <button type="button" className="secondary" disabled={busy || !!checkingReceipt} onClick={() => { if (attempt.current) void submitText(attempt.current.text).catch(() => {}); }}>Retry saved message</button>
+              <button type="button" className="secondary" disabled={busy} onClick={releaseForEditing}>Keep editing</button>
+            </div>}
+          </aside>}
           <form
             className="composer"
             onSubmit={async (e) => {
@@ -1004,13 +1120,15 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
               stopRecognition();
               try {
                 await submitText(text);
-              } catch (error) {
-                fail(error);
+              } catch {
+                // submitText owns the visible receipt recovery state.
               }
             }}
           >
             <textarea
+              ref={composerInput}
               aria-label="Message Leam"
+              readOnly={!!attempt.current}
               placeholder="What’s on your mind?"
               value={text}
               onChange={(e) => {
@@ -1021,6 +1139,7 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
               rows={2}
             />
             <AttachmentComposer
+              compact
               key={thread + ":attachments"}
               items={files.items}
               onChange={files.change}
@@ -1059,14 +1178,21 @@ export function Companion({ fail, fixedThread, onChanged }: Props & { fixedThrea
                   .map((run) => ({
                     runId: run.id,
                     messageId: run.id,
+                    playbackMessageId: null,
+                    replayEligible: !run.failed,
                     text: run.text,
                     final: !!run.textFinal,
                   })),
               ]}
               runs={live.runs}
             />
-            <button className="primary" disabled={busy || uploading || (!text.trim() && !files.ids.length)}>
-              Send to Leam
+            {currentRun && (
+              <button type="button" className="secondary companion-stop" disabled={!!stoppingRun || currentRun.stopRequested} onClick={() => void stopRun(currentRun.id)}>
+                {stoppingRun === currentRun.id ? "Requesting stop…" : currentRun.stopRequested ? "Stop requested…" : "Stop response"}
+              </button>
+            )}
+            <button className="primary send" aria-label="Send to Leam" title="Send to Leam" disabled={busy || uploading || !!attempt.current || (!text.trim() && !files.ids.length)}>
+              <ArrowUp size={20} aria-hidden="true" />
             </button>
           </form>
         </>

@@ -1,0 +1,104 @@
+.resource-links {
+  margin-block: 0.6rem;
+  min-width: 0;
+  width: 100%;
+}
+.resource-links > summary {
+  cursor: pointer;
+  padding-block: 0.5rem;
+  min-height: 44px;
+  font-weight: 550;
+  font-size: 0.9rem;
+}
+.resource-links section,
+.resource-links form {
+  min-width: 0;
+}
+.resource-link-list {
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+}
+.resource-link-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  border-top: 1px solid var(--line);
+  padding-block: 0.6rem;
+  overflow-wrap: anywhere;
+}
+.resource-link-list li > div {
+  min-width: 0;
+}
+.resource-link-list small {
+  display: block;
+  color: var(--sub);
+  font-size: 0.75rem;
+}
+.resource-link-list a {
+  display: inline-block;
+  padding-block: 0.4rem;
+}
+.resource-link-list button {
+  flex: none;
+}
+.resource-link-search {
+  display: grid;
+  gap: 0.6rem;
+  margin-block: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+.resource-link-search label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+.resource-link-search input,
+.resource-link-search select {
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+}
+.resource-links button {
+  min-height: 44px;
+}
+.resource-link-pending {
+  padding: 0.7rem;
+  border: 1px solid var(--semantic-warning-line);
+  border-radius: 10px;
+  background: var(--semantic-warning-surface);
+  color: var(--semantic-warning-ink);
+}
+.resource-link-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.resource-target-selected {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+  border-radius: 10px;
+  scroll-margin-block: 6rem;
+}
+.resource-card:has(.resource-links) {
+  flex-wrap: wrap;
+}
+.resource-card > .resource-links {
+  flex-basis: 100%;
+  margin: 0;
+}
+.resource-card > .resource-links > summary {
+  min-height: 36px;
+}
+@media (min-width: 600px) {
+  .artifact-viewer .resource-link-search {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+    align-items: end;
+  }
+}
+
+.resource-target {
+  min-width: 0;
+}

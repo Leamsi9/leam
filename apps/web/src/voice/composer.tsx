@@ -1,19 +1,27 @@
+import { ComposerModelPicker } from "../composer-model-picker";
+import { outputAvailable, unlockSpeech } from "./engines";
 import type { PlaybackTarget } from "./playback-source";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Mic, Square } from "lucide-react";
+import { AudioLines, Ear, Mic, Square } from "lucide-react";
 import { readInputPreferences } from "./input-preferences";
-import { DictationControls } from "./controls";
+import { DictationControls, ReadAloud } from "./controls";
 import {
   PhoneConversation,
   type PhoneState,
   type Receipt,
   setActiveConversation,
 } from "./conversation";
-import { recognitionAvailable } from "./speech";
+import { recognitionAvailable } from "./engines";
+import { voiceChatTargets } from "./chat-targets";
+import { playback } from "./playback";
 
 export type ChatVoiceReply = {
   runId: string;
   messageId: string;
+  /** null follows the run while live text has no persisted message ID yet. */
+  playbackMessageId?: string | null;
+  /** Failed live partials remain available per message, but are not the last reply. */
+  replayEligible?: boolean;
   text: string;
   final: boolean;
   proseElementId?: string;
@@ -27,6 +35,8 @@ export function VoiceComposer(props: {
   draft: string;
   onDraft: (text: string) => void;
   disabled: boolean;
+  replyPending?: boolean;
+  replayReply?: ChatVoiceReply;
   submit: (text: string) => Promise<Receipt>;
   dictationDisabled?: boolean;
   messages: ChatVoiceReply[];
@@ -37,6 +47,13 @@ export function VoiceComposer(props: {
     notice: "",
     preview: "",
   });
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!state.activeUntil) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [state.activeUntil]);
   const current = useRef(props);
   current.current = props;
   const engine = useRef<PhoneConversation | null>(null);
@@ -51,6 +68,7 @@ export function VoiceComposer(props: {
       (text) => current.current.onDraft(text),
       () => current.current.disabled,
       () => current.current.playbackSource,
+      () => !!current.current.replyPending,
     );
     engine.current = phone;
     const hide = () => {
@@ -67,6 +85,26 @@ export function VoiceComposer(props: {
       window.removeEventListener("pagehide", pagehide);
     };
   }, [props.threadId]);
+  useEffect(() => {
+    const phone = engine.current;
+    if (!phone) return;
+    const source = props.playbackSource;
+    return voiceChatTargets.register(source, () => {
+      if (
+        engine.current !== phone ||
+        current.current.playbackSource.module !== source.module ||
+        current.current.playbackSource.threadId !== source.threadId
+      ) return;
+      unlockSpeech();
+      setActiveConversation(phone);
+      if (phone.state.phase === "speaking") phone.interruptReadout();
+      else {
+        playback.stop();
+        const settings = readInputPreferences();
+        phone.start(settings.language, settings.pauseSeconds * 1000);
+      }
+    });
+  }, [props.threadId, props.playbackSource.module, props.playbackSource.threadId]);
   useEffect(() => {
     const phone = engine.current;
     if (!phone || ["off", "paused"].includes(phone.state.phase)) return;
@@ -96,16 +134,25 @@ export function VoiceComposer(props: {
   }, [props.messages, props.runs, state.runId, state.phase]);
   useEffect(() => {
     engine.current?.readoutReady();
-  }, [props.disabled]);
+  }, [props.disabled, props.replyPending]);
+  const latestReply = props.replayReply ?? props.messages.filter((message) => message.replayEligible !== false && message.text.trim()).at(-1);
   const active = !["off", "paused"].includes(state.phase);
-  function start() {
+  const extended = !!state.activeUntil;
+  const remaining = Math.max(0, Math.ceil(((state.activeUntil || now) - now) / 1000));
+  function start(mode: "conversation" | "active" = "conversation") {
+    unlockSpeech();
     const settings = readInputPreferences();
     if (engine.current) setActiveConversation(engine.current);
-    engine.current?.start(settings.language, settings.pauseSeconds * 1000);
+    engine.current?.start(settings.language, settings.pauseSeconds * 1000, mode);
   }
   return (
     <div className="voice-composer">
       <div className="actions voice-status-row">
+        <ComposerModelPicker
+          key={`${props.playbackSource.module}:${props.playbackSource.threadId}`}
+          module={props.playbackSource.module}
+          threadId={props.playbackSource.threadId}
+        />
         <DictationControls
           threadId={props.threadId}
           draft={props.draft}
@@ -115,24 +162,43 @@ export function VoiceComposer(props: {
         <button
           type="button"
           className="secondary voice-icon"
-          aria-label={active ? "End conversation" : "Conversation"}
-          aria-pressed={active}
-          title={active ? "End conversation" : "Conversation"}
+          aria-label={active && !extended ? "End conversation" : "Conversation"}
+          aria-pressed={active && !extended}
+          title={active && !extended ? "End conversation" : "Conversation"}
           disabled={
-            !active &&
+            (!active || extended) &&
             (props.disabled ||
               !!props.draft.trim() ||
               !recognitionAvailable() ||
-              !window.speechSynthesis)
+              !outputAvailable())
           }
-          onClick={() => (active ? engine.current?.stop() : start())}
+          onClick={() => (active && !extended ? engine.current?.stop() : start())}
         >
-          {active ? (
+          {active && !extended ? (
             <Square size={20} aria-hidden="true" />
           ) : (
             <AudioLines size={20} aria-hidden="true" />
           )}
         </button>
+        <button
+          type="button"
+          className="secondary voice-icon active-listening-toggle"
+          aria-label={extended ? "Stop active listening" : "Active listening (5 minutes)"}
+          aria-pressed={extended}
+          title={extended ? "Stop active listening" : "Keep listening through pauses for up to 5 minutes"}
+          disabled={!extended && (props.disabled || !!props.draft.trim() || !recognitionAvailable() || !outputAvailable())}
+          onClick={() => extended ? engine.current?.stop("Active listening stopped.") : start("active")}
+        >
+          <Ear size={20} aria-hidden="true" />
+        </button>
+        {latestReply && props.playbackSource.threadId && (
+          <ReadAloud
+            label="Replay last reply"
+            text={latestReply.text}
+            final={latestReply.final}
+            target={{ ...props.playbackSource, runId: latestReply.runId, messageId: latestReply.playbackMessageId === null ? undefined : latestReply.playbackMessageId ?? latestReply.messageId }}
+          />
+        )}
         {state.phase === "speaking" && (
           <button
             type="button"
@@ -149,13 +215,20 @@ export function VoiceComposer(props: {
             type="button"
             className="secondary"
             disabled={props.disabled || !!props.draft.trim()}
-            onClick={start}
+            onClick={() => start()}
           >
             Resume conversation
           </button>
         )}
-        {state.notice && <small role="status">{state.notice}</small>}
+        {state.notice && !extended && <small role="status">{state.notice}</small>}
       </div>
+      {extended && <small className="active-listening-status">
+        {state.phase === "starting" ? "Starting microphone" : state.phase === "listening" ? "Microphone on" : "Microphone off"}
+        {" · "}<span role="timer" aria-label="Active listening time remaining" aria-live="off">
+          {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")} left
+        </span>
+        {!["starting", "listening"].includes(state.phase) && state.notice && <> · {state.notice}</>}
+      </small>}
       {state.preview && (
         <small className="voice-preview" aria-label="Conversation speech">
           {state.preview}

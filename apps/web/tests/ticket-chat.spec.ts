@@ -301,7 +301,13 @@ test("live ticket deltas arrive before final and survive stale history and repla
     },
   );
   await f.card
+    .getByRole("button", { name: "Ticket chat options", exact: true })
+    .click();
+  await f.card
     .getByRole("button", { name: "Refresh ticket conversation" })
+    .click();
+  await f.card
+    .getByRole("button", { name: "Close Ticket chat options", exact: true })
     .click();
   await expect.poll(() => entered).toBe(true);
   const delta = {
@@ -336,7 +342,13 @@ test("live ticket deltas arrive before final and survive stale history and repla
     f.card.getByText("Visible partial", { exact: true }),
   ).toBeVisible();
   await f.card
+    .getByRole("button", { name: "Ticket chat options", exact: true })
+    .click();
+  await f.card
     .getByRole("button", { name: "Refresh ticket conversation" })
+    .click();
+  await f.card
+    .getByRole("button", { name: "Close Ticket chat options", exact: true })
     .click();
   await expect(
     f.card.getByText("Visible partial", { exact: true }),
@@ -435,3 +447,45 @@ test("ticket conversation honors the shared browser pause preference", async ({
   await page.clock.fastForward(1000);
   await expect.poll(() => f.sends.length).toBe(1);
 });
+
+for (const width of [390, 1440])
+  test(`ticket partial and final speaker controls follow response text at ${width}`, async ({
+    page,
+  }, info) => {
+    const f = await fixture(page);
+    await page.setViewportSize({ width, height: 900 });
+    await f.open();
+    await f.card
+      .getByLabel("Message about this update")
+      .fill("Show the response");
+    await f.card.getByRole("button", { name: "Send to Codex" }).click();
+    await expect.poll(() => f.sends.length).toBe(1);
+    for (const status of ["inProgress", "completed"]) {
+      const text = `Answer at ${width}: ${status}`;
+      await f.reply(status, text);
+      await expect(f.card.getByText(text, { exact: true })).toBeVisible();
+      const answer = f.card.locator(".message.assistant");
+      await expect(
+        answer.getByRole("button", { name: "Read aloud", exact: true }),
+      ).toBeVisible();
+      expect(
+        await answer.evaluate((el) => {
+          const prose = el.querySelector(".prose")!,
+            speaker = el.querySelector('[aria-label="Read aloud"]')!;
+          return (
+            !!(
+              prose.compareDocumentPosition(speaker) &
+              Node.DOCUMENT_POSITION_FOLLOWING
+            ) &&
+            speaker.getBoundingClientRect().top >=
+              prose.getBoundingClientRect().bottom
+          );
+        }),
+      ).toBe(true);
+      await answer.scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: info.outputPath(`ticket-speaker-${status}.png`),
+      });
+    }
+    expect(f.sends).toHaveLength(1);
+  });

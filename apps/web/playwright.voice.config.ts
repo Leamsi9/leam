@@ -7,6 +7,7 @@ export default defineConfig({
     "voice-conversation.spec.ts",
     "voice-coding.spec.ts",
     "voice-settings.spec.ts",
+    "voice-local.spec.ts",
     "ticket-chat.spec.ts",
     "mobile-layout.spec.ts",
   ],

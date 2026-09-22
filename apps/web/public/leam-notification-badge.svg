@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <title>Leam robot notification badge</title>
+  <g fill="#fff">
+    <circle cx="56" cy="10" r="6"/>
+    <path d="M47 24v-7a7 7 0 0 1 7-7h3v5h-3a2 2 0 0 0-2 2v7z"/>
+    <rect x="9" y="33" width="8" height="22" rx="4"/>
+    <rect x="79" y="33" width="8" height="22" rx="4"/>
+    <path fill-rule="evenodd" d="M32 22h32a13 13 0 0 1 13 13v18a13 13 0 0 1-13 13H32a13 13 0 0 1-13-13V35a13 13 0 0 1 13-13zm-5 23h6a5 5 0 0 1 10 0h6a11 11 0 0 0-22 0zm26 0h6a5 5 0 0 1 10 0h6a11 11 0 0 0-22 0z"/>
+    <path d="M35 70h26l7 18H28zm-13 1c-8 3-11 9-10 17h10zm52 0c8 3 11 9 10 17H74z"/>
+  </g>
+</svg>

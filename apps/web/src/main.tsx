@@ -1,4 +1,15 @@
+import { redirectLegacyInbox } from "./inbox-route";
+import { ResourcesPage } from "./resources";
+import { LazySettingsSection, SettingsActivityBoundary } from "./settings-lifecycle";
+import { ChatDialog } from "./chat-dialog";
+import { Plus } from "lucide-react";
+import { ArtifactLink, ArtifactViewer } from "./artifacts";
+import { MainCodingControl } from "./main-coding";
+import { ApprovalsPanel } from "./approvals";
+import { ApprovalPolicySettings } from "./approval-policy";
+import { NotificationPopup } from "./notification-popup";
 import { PlaybackPanel } from "./voice/playback-panel";
+import { playback } from "./voice/playback";
 import type { PlaybackTarget } from "./voice/playback-source";
 import {
   AttachmentComposer,
@@ -53,7 +64,7 @@ import { CalendarView } from "./calendar";
 import { Today } from "./today";
 import { Goals } from "./goals";
 import { ContextOverview } from "./context-overview";
-import { RoutinesPanel, RoutineInbox } from "./routines";
+import { RoutinesPanel } from "./routines";
 import { UpdatesPanel } from "./updates";
 import { Navigation } from "./navigation";
 import { BacklogPanel } from "./backlog";
@@ -71,11 +82,16 @@ import { ToolPermissionSettings } from "./tool-permissions";
 import { VoiceComposer } from "./voice/composer";
 import { ReadAloud } from "./voice/controls";
 import { stopRecognition } from "./voice/speech";
+import { ProcedureSettings } from "./procedures";
 import { VoiceSettings } from "./voice/settings";
+import { UsageApp, UsageSettings } from "./usage";
 import { stopConversation, type Receipt } from "./voice/conversation";
+import { AppearanceSettings } from "./appearance";
+import "./theme.css";
+
 function App() {
   const [auth, setAuth] = useState<Data | null>(null),
-    [tab, setTab] = useState(
+    [tab, setTab] = useState(() => redirectLegacyInbox(
       [
         "companion",
         "coding",
@@ -86,13 +102,39 @@ function App() {
         "settings",
         "routines",
         "updates",
+        "approvals",
         "backlog",
+        "resources",
+        "inbox",
+        "usage",
+        "tokenops",
       ].includes(new URLSearchParams(location.search).get("view") || "")
         ? new URLSearchParams(location.search).get("view")!
         : sessionValue("tab", "coding"),
-    ),
+    )),
     [error, setError] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
+  const [voiceReturn, setVoiceReturn] = useState(0);
+  async function returnToVoiceChat(target: PlaybackTarget) {
+    const playbackId = playback.snapshot().id;
+    // Resolve native/shared metadata before mounting Coding so its submission
+    // transport remains the one owned by the originating thread.
+    if (target.module === "coding") {
+      const result = await api(`/codex/threads/${encodeURIComponent(target.threadId)}`);
+      if (playback.snapshot().id !== playbackId) return;
+      if (result.thread?.id !== target.threadId) throw new Error("The original chat is unavailable.");
+      rememberSession("coding:selected", result.thread);
+    } else {
+      rememberSession("companion:selected", target.threadId);
+      rememberSession("companion:selectedItem", { thread_id: target.threadId });
+    }
+    rememberSession("tab", target.module);
+    setVoiceReturn((version) => version + 1);
+    setTab(target.module);
+    const url = new URL(location.href);
+    url.searchParams.set("view", target.module);
+    history.replaceState(null, "", url);
+  }
   useEffect(() => {
     const openCoding = (event: Event) => {
       const thread = (event as CustomEvent).detail;
@@ -106,8 +148,14 @@ function App() {
   }, []);
   useEffect(() => {
     const navigate = (event: Event) => {
-      const view = (event as CustomEvent).detail;
-      if (["today", "goals", "calendar", "settings", "overview"].includes(view)) setTab(view);
+      const view = redirectLegacyInbox((event as CustomEvent).detail);
+      if (["today", "goals", "calendar", "settings", "overview", "approvals", "resources", "inbox", "usage", "tokenops"].includes(view)) {
+        setTab(view);
+        rememberSession("tab", view);
+        const url = new URL(location.href);
+        url.searchParams.set("view", view);
+        history.replaceState(null, "", url);
+      }
     };
     window.addEventListener("leam:navigate", navigate);
     return () => window.removeEventListener("leam:navigate", navigate);
@@ -237,15 +285,19 @@ function App() {
         </section>
       </main>
     );
+  const artifactId = new URLSearchParams(location.search).get("artifact");
+  if (artifactId) return <ArtifactViewer id={artifactId} />;
   return (
     <div className="shell">
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <aside className="sidebar">
         <a className="brand" href="/">
+          <img className="brand-icon" src="/leam-icon-192.png" alt="" width="34" height="34" />
           leam<span>·</span>
         </a>
         <p className="sidebar-caption">A place for what matters.</p>
         <Navigation
-          tab={tab}
+          tab={tab === "overview" ? "settings" : tab === "tokenops" ? "usage" : tab}
           onSelect={(id) => {
             setTab(id);
             rememberSession("tab", id);
@@ -256,16 +308,19 @@ function App() {
           }}
         />
         <div className="sidebar-footer">
-          <Circle size={8} fill={online ? "#81a887" : "#bd785f"} />
+          <Circle size={8} fill={online ? "var(--semantic-success-solid)" : "var(--semantic-warning-solid)"} />
           {online ? "Connected" : "Offline"}
           <span>Leam · Preview</span>
         </div>
       </aside>
       <main
+        id="main-content"
+        tabIndex={-1}
         className={`workspace ${["coding", "companion"].includes(tab) ? "chat-workspace" : ""}`}
       >
-        <PlaybackPanel />
+        <PlaybackPanel onReturnToChat={(target) => { void returnToVoiceChat(target).catch(fail); }} />
         <ClientUpdateNotice />
+        <NotificationPopup />
         <header className="topbar">
           <span>YOUR SPACE / {tab.toUpperCase()}</span>
           <span>
@@ -288,99 +343,128 @@ function App() {
           </div>
         )}
         {tab === "coding" ? (
-          <Coding fail={fail} />
+          <Coding key={voiceReturn} fail={fail} />
         ) : tab === "today" ? (
-          <>
-            <Today fail={fail} />
-            <section className="page">
-              <details><summary>Routine reminders</summary><RoutineInbox fail={fail} /></details>
-            </section>
-          </>
+          <Today fail={fail} />
         ) : tab === "goals" ? (
           <Goals fail={fail} />
-        ) : tab === "overview" ? (
-          <section className="page"><h1>Across Leam</h1><ContextOverview /></section>
+
         ) : tab === "routines" ? (
           <RoutinesPanel fail={fail} />
         ) : tab === "calendar" ? (
           <CalendarView fail={fail} />
+        ) : tab === "resources" ? (
+          <ResourcesPage />
         ) : tab === "backlog" ? (
           <BacklogPanel fail={fail} />
+        ) : tab === "approvals" ? (
+          <ApprovalsPanel />
         ) : tab === "updates" ? (
           <UpdatesPanel fail={fail} />
-        ) : tab === "settings" ? (
-          <section className="page">
-            <span className="eyebrow">MAKE IT YOURS</span>
-            <h1>Settings</h1>
-            <div className="card">
-              <h3>Your connection</h3>
-              <p>
-                You are signed in to this Leam installation. Coding connects
-                directly to Codex on your host.
-              </p>
-              <button
-                className="secondary"
-                onClick={() =>
-                  api("/auth/logout", "POST", {})
-                    .then(() => {
-                      clearPrivateSession();
-                      setAuth({ configured: true, authenticated: false });
-                    })
-                    .catch(fail)
-                }
-              >
-                <LogOut size={16} /> Sign out
-              </button>
-            </div>
-            <details className="settings-section">
-              <summary>App installation and offline</summary>
-              <PwaSettings />
-            </details>
-            <details className="settings-section">
-              <summary>Model and reasoning</summary>
-              <ModelSettings fail={fail} />
-            </details>
-            <details className="settings-section">
-              <summary>Companion permissions</summary>
-              <ToolPermissionSettings fail={fail} />
-            </details>
-            <details className="settings-section">
-              <summary>Voice and playback</summary>
-              <VoiceSettings />
-            </details>
-            <details className="settings-section">
-              <summary>Inside Leam</summary>
-              <SystemSettings fail={fail} />
-            </details>
-            <details className="settings-section">
-              <summary>Memory</summary>
-              <MemorySettings fail={fail} />
-            </details>
-            <details className="settings-section">
-              <summary>Backups and recovery</summary>
-              <BackupSettings fail={fail} />
-            </details>
-            <details className="settings-section">
-              <summary>Reminders</summary>
-              <ReminderSettings fail={fail} />
-            </details>
-            <details className="settings-section">
-              <summary>Phone notifications</summary>
-              <PushSettings fail={fail} />
-            </details>
-            <details className="settings-section">
-              <summary>Connected accounts</summary>
-              <AccountSettings fail={fail} />
-            </details>
-          </section>
+        ) : ["settings", "overview", "usage", "tokenops"].includes(tab) ? (
+          null
         ) : (
-          <Companion fail={fail} />
+          <Companion key={voiceReturn} fail={fail} />
         )}
+        <UsageApp active={tab === "usage" || tab === "tokenops"} />
+        <SettingsPage active={tab === "settings" || tab === "overview"} openOverview={tab === "overview"} fail={fail} signedOut={() => {
+          clearPrivateSession();
+          setAuth({ configured: true, authenticated: false });
+        }} />
       </main>
     </div>
   );
 }
+function SettingsPage({
+  active,
+  openOverview,
+  fail,
+  signedOut,
+}: {
+  active: boolean;
+  openOverview: boolean;
+  fail: (error: unknown) => void;
+  signedOut: () => void;
+}) {
+  const [visited, setVisited] = useState(active);
+  useEffect(() => {
+    if (active) setVisited(true);
+  }, [active]);
+  if (!visited && !active) return null;
+  return (
+    <SettingsActivityBoundary active={active}>
+      <section className="page" hidden={!active} aria-label="Settings">
+        <span className="eyebrow">MAKE IT YOURS</span>
+        <h1>Settings</h1>
+        <AppearanceSettings />
+        <div className="card">
+          <h3>Your connection</h3>
+          <p>
+            You are signed in to this Leam installation. Coding connects
+            directly to Codex on your host.
+          </p>
+          <button
+            className="secondary"
+            onClick={() =>
+              api("/auth/logout", "POST", {}).then(signedOut).catch(fail)
+            }
+          >
+            <LogOut size={16} /> Sign out
+          </button>
+        </div>
+        <LazySettingsSection title="App installation and offline">
+          <PwaSettings />
+        </LazySettingsSection>
+        <LazySettingsSection title="Model and reasoning">
+          <ModelSettings fail={fail} />
+        </LazySettingsSection>
+        <ContextOverview key={String(openOverview)} initiallyOpen={openOverview} />
+        <UsageSettings />
+        <LazySettingsSection title="Approval preferences">
+          <ApprovalPolicySettings />
+        </LazySettingsSection>
+        <LazySettingsSection title="Companion permissions">
+          <ToolPermissionSettings fail={fail} />
+        </LazySettingsSection>
+        <LazySettingsSection title="Voice and playback">
+          <VoiceSettings />
+        </LazySettingsSection>
+        <LazySettingsSection title="Inside Leam">
+          <SystemSettings fail={fail} />
+        </LazySettingsSection>
+        <LazySettingsSection title="Operating procedures">
+          <ProcedureSettings />
+        </LazySettingsSection>
+        <LazySettingsSection title="Memory">
+          <MemorySettings fail={fail} />
+        </LazySettingsSection>
+        <LazySettingsSection title="Backups and recovery">
+          <BackupSettings fail={fail} />
+        </LazySettingsSection>
+        <LazySettingsSection title="Reminders">
+          <ReminderSettings fail={fail} />
+        </LazySettingsSection>
+        <LazySettingsSection title="Phone notifications">
+          <PushSettings fail={fail} />
+        </LazySettingsSection>
+        <LazySettingsSection
+          title="Connected accounts"
+          initiallyOpen={Boolean(
+            new URLSearchParams(location.search).get("account"),
+          )}
+        >
+          <AccountSettings fail={fail} />
+        </LazySettingsSection>
+      </section>
+    </SettingsActivityBoundary>
+  );
+}
 function Coding({ fail }: { fail: (e: unknown) => void }) {
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [createError, setCreateError] = useState("");
+  const [createdSession, setCreatedSession] = useState(0);
+  const [optionsError, setOptionsError] = useState("");
+  const createInFlight = useRef(false);
   const restored = useRef(sessionValue<Data | null>("coding:selected", null));
   const initialId = restored.current?.id || "";
   const initial = cachedChat("coding:" + initialId);
@@ -461,10 +545,12 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
   const latestThreadCursor = useRef(threadCursor);
   const [listing, setListing] = useState(false);
   const [listNotice, setListNotice] = useState("");
+  const [listError, setListError] = useState("");
+  const [listCheckedAt, setListCheckedAt] = useState<number | null>(null);
   const listFetchedAt = useRef(0);
   const listBusy = useRef(false),
     listRequest = useRef(0);
-  async function load(more = false) {
+  async function load(more = false, reportError?: (e: unknown) => void) {
     if (listBusy.current || (more && !threadCursor)) return;
     listBusy.current = true;
     setListing(true);
@@ -510,12 +596,14 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
           (more ? "?cursor=" + encodeURIComponent(threadCursor!) : ""),
       );
       if (request !== listRequest.current) return;
+      setListError("");
+      setOptionsError("");
       if (!more) listFetchedAt.current = Date.now();
       if (!more)
         setListNotice(
           [
             r.leamHandoffsUnavailable
-              ? "Some handoff sessions could not be checked. Refresh to try again."
+              ? "Some handoff sessions could not be checked."
               : "",
             r.leamHandoffsTruncated
               ? "The latest 10 accepted handoffs are checked here. Older handoffs remain accessible from their linked proposal."
@@ -557,11 +645,15 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
       });
       setThreadCursor(next);
     } catch (e) {
-      if (request === listRequest.current) fail(e);
+      if (request === listRequest.current) {
+        setListError(e instanceof Error ? e.message : String(e));
+        reportError?.(e);
+      }
     } finally {
       if (request === listRequest.current) {
         listBusy.current = false;
         setListing(false);
+        setListCheckedAt(Date.now());
       }
     }
   }
@@ -954,6 +1046,12 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
         throw new Error(
           "Your previous submission may already be running. No matching delivery receipt was found; inspect the conversation before setting this draft aside.",
         );
+      // Capture exact displayed assistant text before dispatch. Only a known
+      // current turn permits automatic readout after shared steering.
+      const baselines = new Map(currentTurns.current.filter((turn) => turn.id === active).map((turn) => [turn.id,
+        (turn.items || []).filter((item: Data) => item.type === "agentMessage" && typeof item.id === "string" && typeof item.text === "string")
+          .map((item: Data) => ({ messageId: item.id, text: item.text })),
+      ]));
       const r =
         pending.state === "complete"
           ? pending.result
@@ -1005,7 +1103,10 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
       return {
         outcome: "submitted",
         run_id: r.turn.id,
-        autoReply: r.operation !== "steer",
+        autoReply: r.operation !== "steer" || (pending.state !== "complete" && baselines.has(r.turn.id)),
+        ...(r.operation === "steer" && pending.state !== "complete" && baselines.has(r.turn.id)
+          ? { readoutId: attempt.id, readoutBaseline: baselines.get(r.turn.id)! }
+          : {}),
       };
     } catch (e) {
       if (authGeneration === sessionGeneration() && attemptId)
@@ -1031,6 +1132,9 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
       /* Saved receipt/draft remains available. */
     }
   }
+  const latestReply = turns.flatMap((turn) => (turn.items || [])
+    .filter((item: Data) => item.type === "agentMessage" && typeof item.text === "string" && item.text.trim())
+    .map((item: Data) => ({ turn, item }))).at(-1);
   return (
     <section className={"coding-page " + (thread ? "has-thread" : "")}>
       <div className="page-heading">
@@ -1047,37 +1151,16 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
           <RefreshCw size={18} />
         </button>
       </div>
-      {listNotice && <p role="status">{listNotice}</p>}
-      <details className="card new-coding-session">
-        <summary>Start a new coding session</summary>
-        <form
-          className="quick-add"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            try {
-              const result = await api("/codex/threads", "POST", {
-                cwd: newWorkspace,
-              });
-              await load();
-              await choose(result.thread);
-            } catch (e) {
-              fail(e);
-            }
-          }}
-        >
-          <input
-            aria-label="Workspace directory"
-            placeholder="/home/you/Github/project"
-            value={newWorkspace}
-            onChange={(e) => setNewWorkspace(e.target.value)}
-            required
-          />
-          <button className="secondary">Create session</button>
-        </form>
-      </details>
       <div className="coding-layout">
+        <div className="chat-toolbar" aria-label="Coding chat controls">
         <ConversationList
           kind="coding"
+          catalogStatus={<div className="coding-catalog-status" aria-label="Session catalog status">
+            {listNotice && <p role="status">{listNotice}</p>}
+            {listError && <p role="alert">{listError}</p>}
+            {listCheckedAt !== null && <small>Last {listError ? "attempt" : "check"}: <time dateTime={new Date(listCheckedAt).toISOString()}>{new Date(listCheckedAt).toLocaleTimeString()}</time></small>}
+            <button type="button" className="secondary" disabled={listing} onClick={() => void load()} aria-label="Refresh session list">{listing ? "Checking sessions…" : "Refresh session list"}</button>
+          </div>}
           items={threads}
           selected={thread?.id || ""}
           selectedItem={thread}
@@ -1090,54 +1173,58 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
           onSelect={(item) => void choose(item)}
           onChanged={changedConversation}
         />
+        {thread && <MainCodingControl key={thread.id} thread={thread} draft={text} onChanged={() => void load()} />}
+        <ChatDialog label="Coding chat options">
+          <p><strong>{thread?.name || "Coding sessions"}</strong></p>
+          {thread && <>
+            <p>{active ? "Working" : connected ? "Connected" : "Read only"}</p>
+            <p className="chat-path">{thread.cwd}</p>
+            <p>{thread.model || "Owner model"} · {thread.reasoningEffort || "Owner reasoning"}</p>
+            {goal && <section><h3>Build goal · {goal.status}</h3><p>{goal.objective}</p></section>}
+            {thread.transport === "ide-owner" && <p>Continue this same conversation here or in Codex. Messages sent while Codex is working become follow-ups.{thread.truncated && " Showing the latest 50 messages; long messages may be shortened."}</p>}
+          </>}
+          <button className="secondary" disabled={listing} onClick={() => { setOptionsError(""); void load(false, (e) => setOptionsError(e instanceof Error ? e.message : String(e))); }}>Refresh sessions</button>
+          {optionsError && <p role="alert">{optionsError}</p>}
+        </ChatDialog>
+      <ChatDialog label="Start a new coding session" icon={<Plus size={20} />} closeSignal={createdSession}>
+        <form
+          className="quick-add"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (createInFlight.current) return;
+            createInFlight.current = true;
+            setCreatingSession(true);
+            setCreateError("");
+            try {
+              const result = await api("/codex/threads", "POST", {
+                cwd: newWorkspace,
+              });
+              await load();
+              await choose(result.thread);
+              setCreatedSession((value) => value + 1);
+            } catch (e) {
+              setCreateError(e instanceof Error ? e.message : String(e));
+            } finally {
+              createInFlight.current = false;
+              setCreatingSession(false);
+            }
+          }}
+        >
+          <input
+            aria-label="Workspace directory"
+            disabled={creatingSession}
+            placeholder="/home/you/Github/project"
+            value={newWorkspace}
+            onChange={(e) => setNewWorkspace(e.target.value)}
+            required
+          />
+          <button className="secondary" disabled={creatingSession}>{creatingSession ? "Creating…" : "Create session"}</button>
+          {createError && <p role="alert">{createError}</p>}
+        </form>
+      </ChatDialog>
+        </div>
         {thread ? (
           <div className="conversation">
-            <div className="conversation-heading">
-              <button
-                className="icon-button back"
-                aria-label="Back to sessions"
-                onClick={() => {
-                  setThread(null);
-                  rememberSession("coding:selected", null);
-                  selected.current = "";
-                }}
-              >
-                <ArrowLeft size={20} />
-              </button>
-              <div>
-                <strong>{thread.name || "Codex session"}</strong>
-                <small>{thread.cwd}</small>
-                {thread.transport === "ide-owner" && (
-                  <small>
-                    Shared with Codex · {thread.model || "Owner model"} ·{" "}
-                    {thread.reasoningEffort || "Owner reasoning"}
-                  </small>
-                )}
-              </div>
-              <span className="badge">
-                {active ? "Working" : connected ? "Connected" : "Read only"}
-              </span>
-            </div>
-            {goal && (
-              <details className="goal">
-                <summary>Build goal · {goal.status}</summary>
-                <p>{goal.objective}</p>
-              </details>
-            )}
-            {thread.transport === "ide-owner" && (
-              <details className="session-info">
-                <summary>Shared session details</summary>
-                Continue this same conversation here or in Codex. Messages sent
-                while Codex is working become follow-ups.
-                {thread.truncated && (
-                  <span>
-                    {" "}
-                    Showing the latest 50 messages; long messages may be
-                    shortened.
-                  </span>
-                )}
-              </details>
-            )}
             {thread.connectionError && (
               <p role="alert" className="error">
                 {thread.connectionError}
@@ -1295,6 +1382,7 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
             )}
             <form className="composer" onSubmit={send}>
               <AttachmentComposer
+                compact
                 key={"attachments:" + thread.id}
                 items={files.items}
                 onChange={files.change}
@@ -1328,9 +1416,16 @@ function Coding({ fail }: { fail: (e: unknown) => void }) {
                   !connected ||
                   busy ||
                   uploading ||
-                  !!active ||
+                  (!!active && thread.transport !== "ide-owner") ||
                   !!submission.current
                 }
+                replyPending={!!active}
+                replayReply={latestReply ? {
+                  text: latestReply.item.text,
+                  final: latestReply.turn.status === "completed",
+                  runId: latestReply.turn.id,
+                  messageId: latestReply.item.id,
+                } : undefined}
                 dictationDisabled={busy || !!submission.current}
                 submit={submitText}
                 messages={turns.flatMap((turn) => {
@@ -1492,12 +1587,12 @@ function Message({
     return (
       <article id={`coding-message-${item.id}`} className="message assistant">
         <span className="message-label">CODEX</span>
+        <div className="prose markdown">
+          <ReactMarkdown components={{ a: ({ node: _node, ...props }) => <ArtifactLink {...props} /> }} remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
+        </div>
         {playbackTarget && item.text?.trim() && (
           <ReadAloud text={item.text} target={playbackTarget} final={final} />
         )}
-        <div className="prose markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
-        </div>
       </article>
     );
   if (item.type === "reasoning") return null;

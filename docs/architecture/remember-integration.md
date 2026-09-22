@@ -1,6 +1,6 @@
 # Remember integration assessment
 
-The optional Remember adapter preserves an external export schema. Original application files and user databases are not included in this repository.
+Source inspected: `/home/user/Github/Ezra/remember-app` (README, app.js, index.html, server.py, manifest and service worker). Original files and SQLite user data remain untouched.
 
 ## Preserve the product model
 Remember's strongest contribution is a positive commitments model: capacities represent areas of life; objectives have boolean/count/minutes measures, targets, date windows, time, rewards and notes. Daily logs record measured value separately from explicit completion. Toggling completion preserves a previous partial value. This distinction matters: reaching a numeric target and deliberately marking something done are not identical actions.
@@ -13,7 +13,7 @@ The source uses localStorage state, debounced whole-document account synchroniza
 Retain separate task/habit/goal concepts, with capacities as optional organization. Do not copy password hashes, session handling, or whole-state overwrite synchronization. Remember can remain independently usable; a narrow import/export adapter is preferable to embedding its original server.
 
 ## Migration contract
-Offer preview before importing a Remember JSON export: counts, validation errors, date/timezone assumptions and source provenance. Stable source IDs make re-import idempotent. Preserve capacities, objectives, daily logs, notes, rewards and partial progress; never silently drop unknown fields. Import must be transactional and reversible from a pre-import backup. Validate export/import round trips with synthetic data before offering a user-data migration. Use synthetic exports for adapter tests; real imports require an explicit source selection and preview.
+Offer preview before importing a Remember JSON export: counts, validation errors, date/timezone assumptions and source provenance. Stable source IDs make re-import idempotent. Preserve capacities, objectives, daily logs, notes, rewards and partial progress; never silently drop unknown fields. Import must be transactional and reversible from a pre-import backup. Validate export/import round trips with synthetic data before offering a user-data migration. No real Remember account data has been read or migrated.
 
 ## Acceptance still required
 - Numeric and boolean daily progress, undo and concurrent edits work through phone and desktop UI.
@@ -22,4 +22,4 @@ Offer preview before importing a Remember JSON export: counts, validation errors
 - Remember import preview, provenance, repeat import and rollback are tested.
 - Conversation and UI actions use one authoritative commitments service.
 
-Commitments, capacities, daily logs and the backend import adapter are implemented. The import UI is not part of the current MVP surface. Automated tests do not establish acceptance for a particular imported dataset or deployment.
+The initial candidate currently contains only basic task creation/completion. The richer model described here remains implementation scope, not a claim of shipped functionality.

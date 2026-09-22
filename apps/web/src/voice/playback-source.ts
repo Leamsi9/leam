@@ -1,15 +1,28 @@
 import { api, type Data } from "../api";
 import { CodingStreamProjection } from "../coding-stream";
+export type ReplyBaseline = { messageId: string; text: string }[];
+
+/** A steered shared run may contain output from before the spoken request. */
+export function afterReplyBaseline(messageId: string, text: string, baseline?: ReplyBaseline): string | null {
+  const prior = baseline?.find((message) => message.messageId === messageId);
+  if (!prior) return text;
+  if (text.startsWith(prior.text)) return text.slice(prior.text.length);
+  // An older prefix from a delayed history response is not new speech.
+  return prior.text.startsWith(text) ? "" : null;
+}
+
 export type PlaybackTarget = {
   module: "companion" | "coding";
   threadId: string;
   runId: string;
   messageId?: string;
   automatic?: boolean;
+  readoutId?: string;
+  baseline?: ReplyBaseline;
 };
 export type PlaybackUpdate = { text: string; final: boolean; failed?: boolean };
 export const targetKey = (t: PlaybackTarget) =>
-  JSON.stringify([t.module, t.threadId, t.runId, t.messageId || ""]);
+  JSON.stringify([t.module, t.threadId, t.runId, t.messageId || "", t.readoutId || ""]);
 const ended = (status: string) =>
   ["completed", "failed", "interrupted"].includes(status);
 
@@ -53,8 +66,12 @@ export function followPlayback(
         (ended(turn.status) ? messages[messages.length - 1] : undefined);
     if (["failed", "interrupted"].includes(turn.status))
       publish({ text: chosen?.text || "", final: true, failed: true });
-    else if (chosen && typeof chosen.text === "string")
-      publish({ text: chosen.text, final: ended(turn.status) });
+    else if (chosen && typeof chosen.text === "string") {
+      const text = afterReplyBaseline(chosen.id, chosen.text, target.baseline);
+      publish(text === null
+        ? { text: "", final: true, failed: true }
+        : { text, final: ended(turn.status) });
+    }
   }
   async function reconcile() {
     if (closed) return;

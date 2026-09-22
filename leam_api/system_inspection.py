@@ -16,6 +16,7 @@ from .host_tool_ceiling import evidence as ceiling_evidence
 from .host_tool_ceiling import read_environment
 from .ironclaw import RuntimeError
 from .tool_permissions import ToolPermissions
+from .web_search import integration_status as web_search_status
 
 Section = Literal["summary", "model", "release", "modules", "operations", "tools"]
 
@@ -88,7 +89,7 @@ OPERATIONS = [
         "id": "code-and-infrastructure",
         "access": "coding",
         "destination": "Coding",
-        "authority": "Companion can prepare coding.handoff prompts for review now. The user edits/reviews the prompt and explicitly selects Start in Coding to dispatch a dedicated Codex session with validated agent-protocols. No automatic execution or companion approval.",
+        "authority": "Companion can prepare coding.handoff prompts for review now. The user edits and reviews it in More > Approvals, then confirms Send to main for the exact selected Main, or Start in Coding for a dedicated session only if no Main is configured. Validated agent-protocols remain required. No automatic execution or companion approval; an accepted handoff receipt proves dispatch, not completion.",
     },
 ]
 
@@ -322,7 +323,11 @@ class SystemInspector:
             modes = None
         return observation(
             "Fixed runtime executable hash and allowlist environment; caller-scoped live tool settings",
-            {"hostCeiling": ceiling, "mutablePermissions": modes},
+            {
+                "hostCeiling": ceiling,
+                "mutablePermissions": modes,
+                "webSearch": web_search_status(modes),
+            },
             status="available"
             if ceiling["enforcementStatus"] != "unknown" and modes
             else "partial",
@@ -441,7 +446,7 @@ class SystemInspector:
             "activeModel": model["data"]
             or {"provider_id": None, "model": None, "reasoning_effort": None},
             "identityScope": model["scope"],
-            "internalInspection": "Use leam_system for live model, release, module status and operation authority. It is read-only. For coding requests, prepare a coding.handoff proposal now; the user reviews/edits the prompt and selects Start in Coding before a dedicated Codex session runs with validated agent-protocols. Preparing the prompt is supported; execution still requires user approval.",
+            "internalInspection": "Use leam_system for live model, release, module status and operation authority. It is read-only. For coding requests, prepare a coding.handoff proposal now; the user reviews/edits it in More > Approvals, then confirms Send to main for the reviewed Main target (or Start in Coding only when Main is unset). Preparing the prompt is supported; dispatch requires user confirmation and validated agent-protocols. Report dispatch only from an accepted receipt; completion needs a linked result.",
             "architecture": {
                 "source": "Declared Leam product contract",
                 "companion": "Leam integration and personal context on IronClaw",

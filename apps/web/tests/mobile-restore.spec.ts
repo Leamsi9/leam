@@ -10,7 +10,7 @@ async function fixture(page: Page, lost = false) {
     const url = new URL(route.request().url()), path = url.pathname, method = route.request().method();
     if (!path.startsWith('/api/')) {
       const name = path === '/' ? 'index.html' : path.slice(1);
-      if (!['index.html','recovery.js','restore.js','recovery.css'].includes(name)) return route.abort();
+      if (!['index.html','recovery.js','restore.js','maintenance.js','recovery.css'].includes(name)) return route.abort();
       return route.fulfill({body:await readFile(resolve('../../leam_api/recovery_assets',name)),contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html'});
     }
     const reply = (body: any, status = 200) => route.fulfill({status,json:body});

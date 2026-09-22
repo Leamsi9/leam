@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { LinkedResources } from "./resource-links";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { api, type Data } from "./api";
 import { ItemChat } from "./item-chat";
@@ -25,7 +26,9 @@ export function CommitmentCard({
   changed,
   edit,
   fail,
+  compact = false,
 }: {
+  compact?: boolean;
   item: Data;
   capacity?: Data;
   changed: () => Promise<void>;
@@ -37,6 +40,7 @@ export function CommitmentCard({
   useEffect(() => {
     setValue(String(item.log.value));
   }, [item.log.revision]);
+  const Details = compact ? "details" : Fragment;
   const done =
     item.kind === "task" ? item.status === "completed" : item.log.done;
   async function progress(operation: string) {
@@ -59,7 +63,13 @@ export function CommitmentCard({
     }
   }
   return (
-    <article className={"card commitment-card " + (done ? "done" : "")}>
+    <article
+      className={
+        "card commitment-card " +
+        (compact ? "today-commitment-card " : "") +
+        (done ? "done" : "")
+      }
+    >
       <div className="commitment-heading">
         <button
           className="check-button"
@@ -72,12 +82,20 @@ export function CommitmentCard({
         <div>
           <h3>{item.title}</h3>
           <small>
-            {capacity?.name || "Personal"} · {item.kind} · {item.date}
+            {capacity?.name || "Personal"}
+            {!compact && (
+              <>
+                {" "}
+                · {item.kind} · {item.date}
+              </>
+            )}
           </small>
         </div>
-        <button className="secondary" onClick={edit} disabled={busy}>
-          Edit
-        </button>
+        {!compact && (
+          <button className="secondary" onClick={edit} disabled={busy}>
+            Edit
+          </button>
+        )}
       </div>
       {item.measure !== "boolean" && (
         <form
@@ -106,48 +124,59 @@ export function CommitmentCard({
           </button>
         </form>
       )}
-      {item.notes && <p>{item.notes}</p>}
-      {item.reward && (
-        <p className="reward">Something to look forward to: {item.reward}</p>
-      )}
-      {item.reminderTime && (
-        <small>
-          In-app reminder {item.reminderTime} · {item.timezone}
-        </small>
-      )}
-      <details
-        onToggle={async (e) => {
-          if (e.currentTarget.open && !history) {
-            try {
-              setHistory(
-                (await api("/commitments/" + item.id + "/history")).items,
-              );
-            } catch (e) {
-              fail(e);
-            }
-          }
-        }}
+      <Details
+        {...(compact ? { className: "today-row-details" } : {})}
       >
-        <summary>Progress history</summary>
-        {history === null ? (
-          <p>Loading…</p>
-        ) : history.length ? (
-          history.map((l) => (
-            <p key={l.date}>
-              {l.date} · {l.value} {l.measure || item.measure} ·{" "}
-              {l.done ? "Done" : "In progress"}
-            </p>
-          ))
-        ) : (
-          <p>No progress recorded yet.</p>
+        {compact && <summary>Commitment details</summary>}
+        {compact && (
+          <button className="secondary" onClick={edit} disabled={busy}>
+            Edit
+          </button>
         )}
-      </details>
-      <ItemChat
-        kind="commitment"
-        id={item.id}
-        title={item.title}
-        changed={changed}
-      />
+        {item.notes && <p>{item.notes}</p>}
+        {item.reward && (
+          <p className="reward">Something to look forward to: {item.reward}</p>
+        )}
+        {item.reminderTime && (
+          <small>
+            In-app reminder {item.reminderTime} · {item.timezone}
+          </small>
+        )}
+        <details
+          onToggle={async (e) => {
+            if (e.currentTarget.open && !history) {
+              try {
+                setHistory(
+                  (await api("/commitments/" + item.id + "/history")).items,
+                );
+              } catch (e) {
+                fail(e);
+              }
+            }
+          }}
+        >
+          <summary>Progress history</summary>
+          {history === null ? (
+            <p>Loading…</p>
+          ) : history.length ? (
+            history.map((l) => (
+              <p key={l.date}>
+                {l.date} · {l.value} {l.measure || item.measure} ·{" "}
+                {l.done ? "Done" : "In progress"}
+              </p>
+            ))
+          ) : (
+            <p>No progress recorded yet.</p>
+          )}
+        </details>
+        <LinkedResources targetType="commitment" targetId={item.id} />
+        <ItemChat
+          kind="commitment"
+          id={item.id}
+          title={item.title}
+          changed={changed}
+        />
+      </Details>
     </article>
   );
 }
@@ -204,10 +233,22 @@ export function CommitmentForm({
       ref={dialog}
       className="editor-dialog card"
       aria-label="Commitment editor"
+      onFocusCapture={(event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement) || target === event.currentTarget) return;
+        const panel = event.currentTarget.getBoundingClientRect();
+        const field = target.getBoundingClientRect();
+        const header = event.currentTarget.querySelector("header");
+        const top = header && !header.contains(target)
+          ? header.getBoundingClientRect().bottom : panel.top;
+        // Browsers can reveal a textarea's caret while leaving its control clipped.
+        if (field.top < top + 8 || field.bottom > panel.bottom - 12)
+          target.scrollIntoView({ block: "center", inline: "nearest" });
+      }}
       style={{
         margin: "auto",
         width: "min(650px, calc(100vw - 32px))",
-        border: "1px solid #d4ddd7",
+        border: "1px solid var(--line)",
       }}
       onCancel={(event) => {
         event.preventDefault();
@@ -219,7 +260,7 @@ export function CommitmentForm({
         style={{
           position: "sticky",
           top: -1,
-          background: "var(--surface, white)",
+          background: "var(--paper)",
           zIndex: 1,
         }}
       >
@@ -350,6 +391,12 @@ export function CommitmentForm({
               <option value="completed">Completed</option>
             </select>
           </label>
+          {initial?.statusChangedAt && (
+            <p className="muted">Status changed {new Date(initial.statusChangedAt * 1000).toLocaleString()}</p>
+          )}
+          {initial?.completedAt && (
+            <p className="muted">Completed {new Date(initial.completedAt * 1000).toLocaleString()}</p>
+          )}
           <label>
             Start date
             <input

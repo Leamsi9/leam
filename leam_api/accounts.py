@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import secrets
 import time
 import uuid
@@ -10,6 +11,7 @@ from collections import defaultdict
 from typing import Literal
 from urllib.parse import urlsplit
 
+import httpx2
 from authlib.integrations.base_client.errors import OAuthError
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from fastapi import APIRouter, HTTPException, Request
@@ -382,6 +384,7 @@ class Accounts:
         *,
         accepted_statuses=frozenset(),
         capability=None,
+        response_limit=None,
         **kwargs,
     ):
         # Serialize credential rotation, reconnect, removal and refresh within a provider.
@@ -426,7 +429,11 @@ class Accounts:
                     provider != "google"
                     or method != "GET"
                     or url.hostname != "gmail.googleapis.com"
-                    or not url.path.startswith("/gmail/v1/users/me/messages")
+                    or re.fullmatch(
+                        r"/gmail/v1/users/me/(?:messages(?:/[A-Za-z0-9_-]{1,256}(?:/attachments/[A-Za-z0-9_-]{1,2048})?)?|threads/[A-Za-z0-9_-]{1,256})",
+                        url.path,
+                    )
+                    is None
                 ):
                     raise HTTPException(
                         400, "Email access only supports reading Gmail messages"
@@ -442,6 +449,7 @@ class Accounts:
                     400, "Gmail requires explicit read-only email access"
                 )
             token = mail["token"] if capability == "email" else saved["token"]
+            expected_body = row["body"]
             try:
                 async with self.client(
                     provider,
@@ -476,14 +484,63 @@ class Accounts:
                         else:
                             saved["token"] = token
                         with self.store.connect() as db:
-                            db.execute(
-                                "UPDATE accounts SET body=? WHERE id=?",
-                                (
-                                    self.vault.seal("account:" + account_id, saved),
-                                    account_id,
-                                ),
+                            db.execute("BEGIN IMMEDIATE")
+                            config_row = db.execute(
+                                "SELECT value FROM settings WHERE key=?",
+                                ("account_config:" + provider,),
+                            ).fetchone()
+                            current_config = (
+                                self.vault.open(
+                                    "config:" + provider, json.loads(config_row[0])
+                                )
+                                if config_row
+                                else None
                             )
-                    response = await client.request(method, path, **kwargs)
+                            if (
+                                not current_config
+                                or current_config.get("clientId") != config["clientId"]
+                            ):
+                                raise HTTPException(
+                                    409,
+                                    "Account configuration changed during refresh; reconnect",
+                                )
+                            refreshed_body = self.vault.seal(
+                                "account:" + account_id, saved
+                            )
+                            updated = db.execute(
+                                "UPDATE accounts SET body=? WHERE id=? AND body=?",
+                                (refreshed_body, account_id, expected_body),
+                            )
+                            if updated.rowcount != 1:
+                                raise HTTPException(
+                                    409,
+                                    "Account access changed during refresh; start a fresh read",
+                                )
+                            expected_body = refreshed_body
+                    if response_limit is None:
+                        response = await client.request(method, path, **kwargs)
+                    else:
+                        chunks, received = [], 0
+                        async with client.stream(method, path, **kwargs) as streamed:
+                            async for chunk in streamed.aiter_bytes():
+                                received += len(chunk)
+                                if received > response_limit:
+                                    raise HTTPException(
+                                        413,
+                                        "Provider response exceeds the bounded read limit",
+                                    )
+                                chunks.append(chunk)
+                            response = httpx2.Response(
+                                streamed.status_code,
+                                headers={
+                                    key: value
+                                    for key, value in streamed.headers.items()
+                                    if key.lower()
+                                    not in ("content-encoding", "content-length")
+                                },
+                                content=b"".join(chunks),
+                                request=streamed.request,
+                            )
                     if response.status_code == 401:
                         raise ValueError("Account authorization rejected")
                     if (
@@ -507,10 +564,11 @@ class Accounts:
                     if capability == "email":
                         mail["state"] = "reconnect"
                         db.execute(
-                            "UPDATE accounts SET body=? WHERE id=?",
+                            "UPDATE accounts SET body=? WHERE id=? AND body=?",
                             (
                                 self.vault.seal("account:" + account_id, saved),
                                 account_id,
+                                expected_body,
                             ),
                         )
                     else:
@@ -552,6 +610,10 @@ def router(accounts):
             with accounts.store.connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 db.execute("DELETE FROM oauth_states WHERE provider=?", (provider,))
+                db.execute(
+                    "DELETE FROM settings WHERE key IN (SELECT 'email-decisions:' || id FROM accounts WHERE provider=?)",
+                    (provider,),
+                )
                 db.execute("DELETE FROM accounts WHERE provider=?", (provider,))
                 db.execute(
                     "DELETE FROM settings WHERE key=?", ("account_config:" + provider,)
@@ -592,6 +654,9 @@ def router(accounts):
             with accounts.store.connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 db.execute("DELETE FROM oauth_states WHERE provider=?", (provider,))
+                db.execute(
+                    "DELETE FROM settings WHERE key=?", ("email-decisions:" + key,)
+                )
                 db.execute("DELETE FROM accounts WHERE id=?", (key,))
         return {"removed": True, "providerGrantRevoked": False}
 

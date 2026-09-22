@@ -1,0 +1,151 @@
+/* Shared appearance contract. No fonts, images, effects or per-screen palettes. */
+:root, :root[data-theme="light"] {
+  --canvas: #f6f3ec;
+  --paper: #fffcf6;
+  --rail: #eee9df;
+  --ink: #302f2c;
+  --green: #3f5f50;
+  --green-hover: #304b3f;
+  --on-accent: #fffdf5;
+  --soft: #e6ebe2;
+  --line: #d6cec1;
+  --control-line: #887f73;
+  --sub: #625e57;
+  --lilac: #eee7f1;
+  --plum: #704d80;
+  --focus: #774689;
+  --overlay: #20252799;
+  --shadow-panel: 0 2px 8px #42382209;
+  --shadow-popover: 0 12px 36px #30291d26;
+  --semantic-neutral-surface: #eee9e0;
+  --semantic-neutral-ink: #514b43;
+  --semantic-neutral-line: #877f73;
+  --semantic-neutral-solid: #696156;
+  --semantic-info-surface: #e7edf1;
+  --semantic-info-ink: #36566d;
+  --semantic-info-line: #71899b;
+  --semantic-info-solid: #426881;
+  --semantic-success-surface: #e6eddf;
+  --semantic-success-ink: #365b3d;
+  --semantic-success-line: #748766;
+  --semantic-success-solid: #456c4e;
+  --semantic-warning-surface: #f4ead6;
+  --semantic-warning-ink: #75521c;
+  --semantic-warning-line: #a27c39;
+  --semantic-warning-solid: #85601e;
+  --semantic-danger-surface: #f5e5df;
+  --semantic-danger-ink: #883f32;
+  --semantic-danger-line: #b2705c;
+  --semantic-danger-solid: #a14e3c;
+  --semantic-violet-surface: #eee6f2;
+  --semantic-violet-ink: #69457d;
+  --semantic-violet-line: #9471a5;
+  --semantic-violet-solid: #79528a;
+  --semantic-rose-surface: #f1e5e9;
+  --semantic-rose-ink: #754456;
+  --semantic-rose-line: #a77a8b;
+  --semantic-rose-solid: #8c536a;
+  --semantic-personal-surface: #e2ece7;
+  --semantic-personal-ink: #315d51;
+  --semantic-personal-line: #658879;
+  --semantic-personal-solid: #426d5e;
+}
+:root[data-theme="dark"] {
+  --canvas: #202527;
+  --paper: #292f31;
+  --rail: #242a2c;
+  --ink: #eee9df;
+  --green: #b2cbbb;
+  --green-hover: #c8ddcf;
+  --on-accent: #202a24;
+  --soft: #303e35;
+  --line: #485153;
+  --control-line: #8b9594;
+  --sub: #c3bdb3;
+  --lilac: #3b3343;
+  --plum: #d4b8e1;
+  --focus: #dbb8ea;
+  --overlay: #0c1115bd;
+  --shadow-panel: 0 2px 10px #080e111c;
+  --shadow-popover: 0 12px 36px #080e1155;
+  --semantic-neutral-surface: #363937;
+  --semantic-neutral-ink: #ddd5c8;
+  --semantic-neutral-line: #999e91;
+  --semantic-neutral-solid: #b8bbaa;
+  --semantic-info-surface: #2e3e49;
+  --semantic-info-ink: #c0d7e4;
+  --semantic-info-line: #839faf;
+  --semantic-info-solid: #a5c4d7;
+  --semantic-success-surface: #2d3e31;
+  --semantic-success-ink: #c9dec2;
+  --semantic-success-line: #8ca781;
+  --semantic-success-solid: #b0cca6;
+  --semantic-warning-surface: #423b2b;
+  --semantic-warning-ink: #edd6a4;
+  --semantic-warning-line: #bda06a;
+  --semantic-warning-solid: #d7bb80;
+  --semantic-danger-surface: #47332f;
+  --semantic-danger-ink: #efc6ba;
+  --semantic-danger-line: #c38e7d;
+  --semantic-danger-solid: #dea593;
+  --semantic-violet-surface: #3d3448;
+  --semantic-violet-ink: #ddc8ea;
+  --semantic-violet-line: #a791bd;
+  --semantic-violet-solid: #c6afd9;
+  --semantic-rose-surface: #423039;
+  --semantic-rose-ink: #edc6d5;
+  --semantic-rose-line: #b48c9c;
+  --semantic-rose-solid: #d8a7bb;
+  --semantic-personal-surface: #2c3e38;
+  --semantic-personal-ink: #c2dfd1;
+  --semantic-personal-line: #86aa99;
+  --semantic-personal-solid: #a6c9b8;
+}
+
+:root {
+  --text-secondary: var(--sub);
+  --text-warning: var(--semantic-warning-ink);
+  --surface: var(--paper);
+  --muted: var(--sub);
+  --text: var(--ink);
+  --accent: var(--green);
+  --radius-control: 12px;
+  --radius-panel: 18px;
+  --motion-fast: 140ms;
+}
+body { background: var(--canvas); color: var(--ink); }
+input, textarea, select { color: var(--ink); background-color: var(--paper); accent-color: var(--green); }
+input::placeholder, textarea::placeholder { color: var(--sub); opacity: 1; }
+option { color: var(--ink); background: var(--paper); }
+button { color: inherit; transition-duration: var(--motion-fast); }
+button:disabled { opacity: .6; }
+button.primary, button.send, .active-listening-toggle[aria-pressed="true"] { color: var(--on-accent); }
+.card { box-shadow: var(--shadow-panel); }
+.sidebar nav button.selected { background: var(--soft); color: var(--green); box-shadow: inset 3px 0 var(--green); }
+.navigation-sheet, .chat-options-dialog, .playback-panel { box-shadow: var(--shadow-popover); }
+dialog { color: var(--ink); background: var(--paper); border-color: var(--line); }
+dialog::backdrop { background: var(--overlay); }
+summary:focus-visible, [tabindex]:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+::selection { background: var(--lilac); color: var(--ink); }
+.appearance-settings h3 { display: flex; align-items: center; gap: 8px; }
+.appearance-settings select { width: min(100%, 320px); min-height: 44px; }
+.appearance-settings small { display: block; margin-top: 8px; }
+.appearance-settings [role="status"] { margin: 8px 0 0; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+}
+@media (forced-colors: active) {
+  button, input, textarea, select { border: 1px solid ButtonText; }
+  .sidebar nav button.selected { outline: 2px solid Highlight; }
+}
+/* Field boundaries remain visible independently of their placeholder text. */
+input:not([type="checkbox"]):not([type="radio"]), textarea, select { border-color: var(--control-line); }
+.composer { border-color: var(--control-line); }
+.composer textarea { border: 1px solid var(--control-line); border-radius: 8px; padding: 8px; }
+.auth-brand .brand span { color: inherit; }
+
+/* Preserve visible control boundaries on dense Usage forms. */
+.usage-filters select, .usage-form input { border-color: var(--control-line); }
+/* Generated HTML owns its colours, including default black body text. */
+.artifact-interactive iframe { color-scheme: light; background: Canvas; }
+.inbox-content footer button { background: var(--soft); color: var(--ink); border-color: var(--control-line); }

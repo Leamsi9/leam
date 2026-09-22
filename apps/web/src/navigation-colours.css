@@ -1,0 +1,12 @@
+/* Gentle destination identity; selection/focus never depend on hue alone. */
+[data-destination]{--nav-paper:var(--semantic-neutral-surface);--nav-ink:var(--semantic-neutral-ink)}
+[data-destination="companion"],[data-destination="usage"]{--nav-paper:var(--semantic-violet-surface);--nav-ink:var(--semantic-violet-ink)}
+[data-destination="today"],[data-destination="resources"],[data-destination="approvals"]{--nav-paper:var(--semantic-warning-surface);--nav-ink:var(--semantic-warning-ink)}
+[data-destination="goals"],[data-destination="updates"]{--nav-paper:var(--semantic-personal-surface);--nav-ink:var(--semantic-personal-ink)}
+[data-destination="calendar"],[data-destination="coding"],[data-destination="backlog"]{--nav-paper:var(--semantic-info-surface);--nav-ink:var(--semantic-info-ink)}
+[data-destination="routines"]{--nav-paper:var(--semantic-success-surface);--nav-ink:var(--semantic-success-ink)}
+.sidebar nav button[data-destination],.navigation-grid button[data-destination]{background:var(--nav-paper);color:var(--nav-ink)}
+.sidebar nav button[data-destination]:hover,.navigation-grid button[data-destination]:hover{background:var(--nav-paper);text-decoration:underline}
+.sidebar nav button[data-destination].selected,.navigation-grid button[data-destination].selected{background:var(--nav-paper);color:var(--nav-ink);box-shadow:inset 3px 0 currentColor,inset 0 0 0 1px currentColor}
+.sidebar nav button[data-destination]:focus-visible,.navigation-grid button[data-destination]:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+@media(forced-colors:active){.sidebar nav button[data-destination].selected,.navigation-grid button[data-destination].selected{outline:2px solid Highlight}}

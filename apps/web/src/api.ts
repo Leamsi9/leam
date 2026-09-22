@@ -4,6 +4,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public actionReserved: string | null,
+    public status?: number,
   ) {
     super(message);
   }
@@ -42,6 +43,7 @@ export async function api(
         ? data.detail
         : JSON.stringify(data.detail),
       response.headers.get("X-Leam-Action-Reserved"),
+      response.status,
     );
   return data;
 }

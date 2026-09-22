@@ -14,6 +14,20 @@ from leam_api.recovery import SERVICES
     "wrong", ["", "client", "app_cwd", "mcp_cwd", "app_data", "mcp_data"]
 )
 def test_restore_rejects_wrong_serving_generation(tmp_path, monkeypatch, wrong):
+    from fastapi.testclient import TestClient
+    from test_api import FakeCodex
+
+    from leam_api.app import create_app
+
+    with TestClient(
+        create_app(
+            tmp_path / "health-caller",
+            {"http://testserver"},
+            bootstrap="fixture",
+            codex=FakeCodex(),
+        )
+    ) as client:
+        actual_health = client.get("/api/health").json()
     _, _, deployment, runtime = fixture(tmp_path)
     value = deployment.read()
     pids = {"app": 61001, "mcp": 61002}
@@ -37,7 +51,7 @@ def test_restore_rejects_wrong_serving_generation(tmp_path, monkeypatch, wrong):
 
     def response(request):
         if request.url.path == "/api/health":
-            return httpx.Response(200, json={"operational": True})
+            return httpx.Response(200, json=actual_health)
         if request.url.path == "/mcp":
             return httpx.Response(
                 200, json={"result": {"tools": [{"name": "fixture"}]}}

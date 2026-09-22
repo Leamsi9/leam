@@ -35,6 +35,7 @@ class Publication(Input):
 
 
 class QA(Input):
+    expectedRevision: int | None = Field(default=None, ge=1, strict=True)
     deploymentId: str = Field(min_length=1, max_length=256)
     state: State
     details: str = Field(default="", max_length=10000)
@@ -100,6 +101,48 @@ class Updates:
         }
 
     @staticmethod
+    def rationale(db, feature):
+        if not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='backlog_assessments'"
+        ).fetchone():
+            return {}
+        row = db.execute(
+            "SELECT body FROM backlog_assessments WHERE feature=?", (feature,)
+        ).fetchone()
+        if not row:
+            return {}
+        body = json.loads(row["body"])
+        return {
+            key: body[key]
+            for key in ("rationale", "scope")
+            if isinstance(body.get(key), str)
+        }
+
+    def described_item(self, db, row, seen=0):
+        # Backfill the display from the exact feature, without rewriting QA/UAT
+        # receipts or manufacturing a reason for legacy tickets without evidence.
+        result = {**self.item(row, seen), **self.rationale(db, row["feature"])}
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='backlog_assessments'"
+        ).fetchone():
+            assessment = db.execute(
+                "SELECT revision,body FROM backlog_assessments WHERE feature=?",
+                (row["feature"],),
+            ).fetchone()
+            body = json.loads(assessment["body"]) if assessment else {}
+            if body.get("worker") and body.get("deliveryState") in {
+                "in_progress",
+                "blocked",
+                "handover",
+            }:
+                result["activeWork"] = {
+                    name: body.get(name)
+                    for name in ("deliveryState", "owner", "worker", "currentStep")
+                }
+                result["activeWork"]["revision"] = assessment["revision"]
+        return result
+
+    @staticmethod
     def event(db, key, actor, body):
         return db.execute(
             "INSERT INTO deployment_update_events(update_id,actor,body,created) VALUES (?,?,?,?)",
@@ -134,6 +177,7 @@ class Updates:
                     "A new deployment must be later than the current receipt"
                 )
             key = str(uuid.uuid4())
+            data.update(self.rationale(db, publication.feature))
             data.update(
                 {
                     "qa": {"state": "pending", "details": "", "updatedAt": None},
@@ -175,8 +219,14 @@ class Updates:
                 raise ValueError(
                     "This deployment was superseded; review the latest update"
                 )
-            if row["deployment_id"] != review.deploymentId or (
-                field == "uat" and row["revision"] != review.revision
+            if (
+                row["deployment_id"] != review.deploymentId
+                or (field == "uat" and row["revision"] != review.revision)
+                or (
+                    field == "qa"
+                    and review.expectedRevision is not None
+                    and row["revision"] != review.expectedRevision
+                )
             ):
                 raise ValueError("Deployment update changed; refresh before reviewing")
             data = json.loads(row["body"])
@@ -230,6 +280,16 @@ class Updates:
         with self.store.connect() as db:
             return self._status(db)
 
+    def get(self, key):
+        with self.store.connect() as db:
+            db.execute("BEGIN")
+            row = db.execute(
+                "SELECT * FROM deployment_updates WHERE id=?", (key,)
+            ).fetchone()
+            if row is None:
+                raise KeyError("Update not found")
+            return self.described_item(db, row, self._status(db)["seenSequence"])
+
     def list(self, before=None, limit=50):
         with self.store.connect() as db:
             db.execute("BEGIN")
@@ -241,7 +301,8 @@ class Updates:
             return {
                 **status,
                 "items": [
-                    self.item(row, status["seenSequence"]) for row in rows[:limit]
+                    self.described_item(db, row, status["seenSequence"])
+                    for row in rows[:limit]
                 ],
                 "nextCursor": rows[limit - 1]["sequence"]
                 if len(rows) > limit
@@ -326,6 +387,10 @@ def router(updates):
     @routes.get("/status")
     async def status():
         return updates.status()
+
+    @routes.get("/{key}")
+    async def get(key: uuid.UUID):
+        return call(updates.get, str(key))
 
     @routes.post("/seen")
     async def seen(body: Seen):

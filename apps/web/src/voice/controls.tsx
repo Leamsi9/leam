@@ -1,3 +1,4 @@
+import { outputAvailable, unlockSpeech } from "./engines";
 import { playback } from "./playback";
 import { targetKey, type PlaybackTarget } from "./playback-source";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -5,11 +6,11 @@ import { Mic, Volume2, Square, X } from "lucide-react";
 import { stopConversation } from "./conversation";
 import { readInputPreferences } from "./input-preferences";
 import {
-  browserInput,
+  createSpeechInput,
   recognitionAvailable,
   stopSpeech,
   type SpeechInput,
-} from "./speech";
+} from "./engines";
 
 type DictationProps = {
   threadId: string;
@@ -86,7 +87,7 @@ export function DictationControls({
     setPreview("");
     setState("starting");
     const token = ++generation.current;
-    const input = browserInput();
+    const input = createSpeechInput();
     capture.current = input;
     timer.current = setTimeout(
       () =>
@@ -213,10 +214,12 @@ export function ReadAloud({
   text,
   target,
   final = true,
+  label = "Read aloud",
 }: {
   text: string;
   target: PlaybackTarget;
   final?: boolean;
+  label?: string;
 }) {
   const state = useSyncExternalStore(playback.subscribe, playback.snapshot);
   const active =
@@ -230,15 +233,16 @@ export function ReadAloud({
     <button
       type="button"
       className="secondary voice-icon"
-      aria-label={active ? "Stop speaking" : "Read aloud"}
-      title={active ? "Stop speaking" : "Read aloud"}
-      disabled={!window.speechSynthesis}
+      aria-label={active ? "Stop speaking" : label}
+      title={active ? "Stop speaking" : label}
+      disabled={!outputAvailable()}
       onClick={() => {
         if (active) {
           playback.stop();
           return;
         }
         stopConversation("Conversation stopped for manual playback.");
+        unlockSpeech();
         playback.start(target, text, final);
       }}
     >

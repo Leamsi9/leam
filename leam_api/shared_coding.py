@@ -14,7 +14,13 @@ from .coding_policy import CodingPolicyError, coding_context
 from .shared_decisions import SharedDecisions
 from .shared_session import SharedSessionError, SharedSessionRenewal
 from .shared_session_commands import PrivateIdeCommands, SubmissionUncertain
-from .shared_session_stream import PrivateIdeStream, project_snapshot
+from .shared_session_stream import PrivateIdeStream, project_snapshot, runtime_blocked
+
+RUNTIME_UNAVAILABLE = (
+    "The original Codex window is connected, but this session is not ready. "
+    "Reopen this conversation in VS Code; if it still says thread not found, "
+    "refresh the VS Code window. Then reconnect Leam. Sending is paused until the session is ready."
+)
 
 
 class SharedCoding:
@@ -51,6 +57,18 @@ class SharedCoding:
         self.lock = asyncio.Lock()
         self.start_lock = asyncio.Lock()
         self.decisions = SharedDecisions(self)
+
+    @property
+    def connected(self):
+        return self._transport_connected and not runtime_blocked(self.snapshot)
+
+    @connected.setter
+    def connected(self, value):
+        self._transport_connected = value
+
+    def require_runtime_ready(self):
+        if self._transport_connected and runtime_blocked(self.snapshot):
+            raise HTTPException(409, RUNTIME_UNAVAILABLE)
 
     def owns(self, thread_id):
         return self.thread_id is not None and thread_id == self.thread_id
@@ -95,7 +113,10 @@ class SharedCoding:
             renewal = False
             try:
                 async for snapshot in generator:
-                    if self.snapshot and snapshot.owner != self.snapshot.owner:
+                    if self.snapshot and (
+                        snapshot.owner != self.snapshot.owner
+                        or runtime_blocked(snapshot) != runtime_blocked(self.snapshot)
+                    ):
                         self.generation = str(uuid.uuid4())
                     self.snapshot = snapshot
                     self.connected = True
@@ -152,7 +173,14 @@ class SharedCoding:
             raise HTTPException(503, "Shared Codex snapshot is not available")
         result = project_snapshot(self.snapshot)
         result.update(
-            connected=self.connected, generation=self.generation, error=self.error
+            connected=self.connected,
+            transportConnected=self._transport_connected,
+            generation=self.generation,
+            error=(
+                RUNTIME_UNAVAILABLE
+                if self._transport_connected and runtime_blocked(self.snapshot)
+                else self.error
+            ),
         )
         result["thread"]["transport"] = "ide-owner"
         cwd = self.snapshot.state.get("cwd")
@@ -218,7 +246,15 @@ class SharedCoding:
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
 
-    async def send(self, text, request_id, generation, attachment_ids=None):
+    async def send(
+        self,
+        text,
+        request_id,
+        generation,
+        attachment_ids=None,
+        *,
+        coordination_context=None,
+    ):
         attachment_ids = attachment_ids or []
         attachments = AttachmentStore(self.store)
         async with self.lock:
@@ -227,6 +263,7 @@ class SharedCoding:
             if existing is not None:
                 return existing
             await self.ensure()
+            self.require_runtime_ready()
             if not self.connected or generation != self.generation:
                 raise HTTPException(
                     409,
@@ -239,11 +276,13 @@ class SharedCoding:
             try:
                 await asyncio.to_thread(coding_context)
                 extra_input, extra_context = await attachments.coding(attachment_ids)
+                extra_context.update(coordination_context or {})
             except CodingPolicyError as error:
                 raise HTTPException(503, str(error)) from error
             except ValueError as error:
                 raise HTTPException(422, str(error)) from error
             # Ensure the owner/generation did not change during policy validation.
+            self.require_runtime_ready()
             if not self.connected or generation != self.generation:
                 raise HTTPException(
                     409, "Shared Codex reconnected. Refresh before sending."
@@ -251,7 +290,7 @@ class SharedCoding:
             snapshot = self.snapshot
             active = self.view()["activeTurnId"]
             try:
-                attachments.bind(attachment_ids, request_id)
+                attachments.bind(attachment_ids, request_id, thread_id=self.thread_id, surface="coding")
                 existing = self.store.reserve(request_id, fingerprint)
             except ValueError as error:
                 raise HTTPException(409, str(error)) from error
@@ -260,7 +299,7 @@ class SharedCoding:
             try:
                 extra = (
                     {"extra_input": extra_input, "extra_context": extra_context}
-                    if attachment_ids
+                    if attachment_ids or extra_context
                     else {}
                 )
                 if active:

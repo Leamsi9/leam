@@ -55,6 +55,11 @@ def test_explicit_coding_request_is_grounded_as_prepare_now_approve_later(tmp_pa
             "When the user asks you to code, build, fix or change software" in envelope
         )
         assert "prepare a coding.handoff proposal immediately" in envelope
+        assert "More > Approvals" in envelope
+        assert "Send to main uses the selected Main session" in envelope
+        assert "Selection changes require fresh review" in envelope
+        assert "review below" not in envelope
+        assert "not a permission sandbox" in envelope
         assert "Do not refuse on the grounds that you can only review" in envelope
         assert "automatic delegation is not implemented" not in envelope
         assert "automatic companion delegation not implemented" not in envelope
@@ -75,6 +80,12 @@ def test_explicit_coding_request_is_grounded_as_prepare_now_approve_later(tmp_pa
             },
         )
         assert schema.status_code == 200, schema.text
+        description = schema.json()["inputSchema"]["description"]
+        assert "More > Approvals" in description and "Send to main" in description
+        assert (
+            "no dispatch" in description
+            and "Target changes require fresh review" in description
+        )
         proposed = client.post(
             "/api/internal/tools",
             headers=auth,

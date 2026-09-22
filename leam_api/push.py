@@ -20,6 +20,7 @@ from py_vapid import Vapid
 from pydantic import Field, field_validator
 from pywebpush import WebPusher
 
+from .maintenance import work_admission
 from .restore_automation import state as automation_state, MESSAGE as AUTOMATION_PAUSED
 from .commitments import Input
 
@@ -80,7 +81,7 @@ class Keys(Input):
 class Subscription(Input):
     endpoint: str = Field(max_length=4096)
     keys: Keys
-    expirationTime: float | None = None
+    expirationTime: float | None = Field(default=None, allow_inf_nan=False)
 
     @field_validator("endpoint")
     @classmethod
@@ -159,7 +160,8 @@ class Push:
     async def run(self):
         while True:
             try:
-                await self.tick()
+                with work_admission(self.store):
+                    await self.tick()
                 self.error = None
             except Exception as error:
                 self.error = type(error).__name__
@@ -200,7 +202,20 @@ class Push:
         sub = body.subscription.model_dump(exclude_none=True)
         key = hashlib.sha256(sub["endpoint"].encode()).hexdigest()
         now = self.clock()
+        if sub.get("expirationTime") is not None and sub["expirationTime"] <= now * 1000:
+            raise HTTPException(409, "Subscription expired; enable this device again")
         with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            previous = db.execute(
+                "SELECT state,body FROM push_devices WHERE id=?", (key,)
+            ).fetchone()
+            if (
+                previous
+                and previous["state"] == "expired"
+                and json.loads(previous["body"])["keys"] == sub["keys"]
+            ):
+                # Changing a name/expiration hint cannot revive rejected credentials.
+                raise HTTPException(409, "Subscription expired; enable this device again")
             db.execute(
                 """INSERT INTO push_devices VALUES (?,?,?,?,?,?) ON CONFLICT(id)
                 DO UPDATE SET name=excluded.name,body=excluded.body,state='active',updated=excluded.updated""",

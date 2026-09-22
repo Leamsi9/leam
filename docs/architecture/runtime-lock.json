@@ -6,9 +6,9 @@
   "candidateListen": "127.0.0.1:46410",
   "home": "~/.local/share/leam-next/ironclaw",
   "upstreamAssetSha256": "fa5d422dcaff510cdae13380304c40d4f46b5ac832d576b16131699cea5955ef",
-  "sourceCommit": "e95ae453b04a67c50ff9446becdf8af506f41288",
-  "qa": "Pinned public source only; no prebuilt Leam runtime artifact supplied. Record an installation build receipt and perform deployment acceptance separately.",
-  "hostCapabilityCeilingVersion": 1,
-  "publicRuntimeSourceCommit": "e95ae453b04a67c50ff9446becdf8af506f41288",
-  "runtimeRepository": "https://github.com/Leamsi9/leam-runtime"
+  "sourceCommit": "7712546a8b47828b6a6ce52e19829a1e044d05e2",
+  "sha256": "67bf0084e8e3328dfc0c8998a042ef30d04fce1e3009b80d6a1e3791ba00a99c",
+  "profile": "dev",
+  "qa": "Deployed; same-account read-only Codex credential following passed caller, concurrency and live Companion QA. Public source publication pending.",
+  "hostCapabilityCeilingVersion": 1
 }

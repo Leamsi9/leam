@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import Field, field_validator
 
+from .maintenance import work_admission
 from .restore_automation import state as automation_state, MESSAGE as AUTOMATION_PAUSED
 from .commitments import Commitment, Input
 from .reminders import due_at
@@ -262,7 +263,8 @@ class Routines:
     async def run(self):
         while True:
             try:
-                self.tick()
+                with work_admission(self.store):
+                    self.tick()
             except Exception as error:
                 self.last_error = type(error).__name__
             await asyncio.sleep(15)

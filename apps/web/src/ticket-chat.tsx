@@ -1,3 +1,9 @@
+import "./contextual-chat.css";
+import { ArrowUp } from "lucide-react";
+import { ChatDialog } from "./chat-dialog";
+import { sessionValue } from "./session-cache";
+import { ArtifactLink } from "./artifacts";
+import { MainCodingControl } from "./main-coding";
 import {
   AttachmentComposer,
   AttachmentList,
@@ -45,15 +51,75 @@ function savedPending(key: string): Pending | null {
 /** Closed panels do not mount a transport or make any Codex request. */
 export function TicketChat({ ticket }: { ticket: Data }) {
   const [open, setOpen] = useState(false);
+  const canonical = ticket.feature ? `feature:${ticket.feature}` : ticket.id;
+  // Do not silently move an uncertain message or a saved old-deployment draft.
+  const [selected, select] = useState(() =>
+    ticket.id &&
+    (sessionStorage.getItem(`leam-ticket-pending:${ticket.id}`) ||
+      sessionStorage.getItem(`leam-ticket-draft:${ticket.id}`) ||
+      sessionStorage.getItem(`leam-main-task:${ticket.id}`) ||
+      sessionValue<Data[]>(`attachments:ticket:${ticket.id}`, []).length > 0)
+      ? ticket.id
+      : canonical,
+  );
+  const [older, setOlder] = useState<Data[]>([]);
   return (
-    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>Chat about this update</summary>
-      {open && <TicketConversation key={ticket.id} ticket={ticket} />}
+    <details
+      className="contextual-chat ticket-chat"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        {ticket.id ? "Chat about this update" : "Chat about this ticket"}
+      </summary>
+      {open && (
+        <>
+          {(older.length > 0 || selected !== canonical) && (
+            <label>
+              Ticket conversation
+              <select
+                value={selected}
+                onChange={(event) => select(event.target.value)}
+              >
+                <option value={canonical}>Ongoing feature conversation</option>
+                {selected !== canonical &&
+                  !older.some((item) => item.updateId === selected) && (
+                    <option value={selected}>
+                      Saved deployment conversation
+                    </option>
+                  )}
+                {older.map((item) => (
+                  <option key={item.updateId} value={item.updateId}>
+                    Earlier deployment · {item.deploymentId}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <TicketConversation
+            key={selected}
+            ticket={{ ...ticket, id: selected }}
+            older={setOlder}
+            label={
+              ticket.id
+                ? "Message about this update"
+                : "Message about this ticket"
+            }
+          />
+        </>
+      )}
     </details>
   );
 }
 
-function TicketConversation({ ticket }: { ticket: Data }) {
+function TicketConversation({
+  ticket,
+  older,
+  label,
+}: {
+  ticket: Data;
+  older: (items: Data[]) => void;
+  label: string;
+}) {
   const draftKey = `leam-ticket-draft:${ticket.id}`;
   const pendingKey = `leam-ticket-pending:${ticket.id}`;
   const files = useAttachmentDraft("ticket:" + ticket.id);
@@ -77,7 +143,9 @@ function TicketConversation({ ticket }: { ticket: Data }) {
   const projectedTurns = useRef(new Set<string>());
   const initializedTurns = useRef(new Set<string>());
   const [, setPendingRevision] = useState(0);
-  const endpoint = `/updates/${encodeURIComponent(ticket.id)}/chat`;
+  const endpoint = ticket.id.startsWith("feature:")
+    ? `/features/${encodeURIComponent(ticket.id.slice(8))}/chat`
+    : `/updates/${encodeURIComponent(ticket.id)}/chat`;
   const report = (value: unknown) => {
     if (mounted.current)
       setError(value instanceof Error ? value.message : String(value));
@@ -130,6 +198,7 @@ function TicketConversation({ ticket }: { ticket: Data }) {
       .then(async (status) => {
         if (!mounted.current) return;
         current.current = status;
+        older(status.olderConversations || []);
         setThread(status);
         if (status.threadId) {
           pending.current =
@@ -402,11 +471,43 @@ function TicketConversation({ ticket }: { ticket: Data }) {
     }
   }
   return (
-    <section aria-label={`Chat about ${ticket.title}`}>
-      <p>
-        Direct to Codex in a separate ticket conversation. Sending includes this
-        update's context and agent-protocols. Chat does not mark UAT.
-      </p>
+    <section
+      className="contextual-chat-body ticket-conversation"
+      data-has-exchanges={turns.length > 0 || busy || !!pending.current || !!activeTurnId}
+      aria-label={`Chat about ${ticket.title}`}
+    >
+      <div
+        className="contextual-chat-toolbar"
+        aria-label="Ticket chat controls"
+      >
+        <span className="contextual-chat-label">Codex</span>
+        <MainCodingControl
+          key={ticket.id}
+          ticketId={ticket.id}
+          thread={thread?.threadId ? { id: thread.threadId } : null}
+          draft={text}
+        />
+        <ChatDialog label="Ticket chat options">
+          <p>
+            Direct to Codex in this ticket’s conversation. Messages include the
+            ticket context and agent-protocols. Chat does not mark UAT.
+          </p>
+          {thread?.threadId && (
+            <>
+              <p>
+                Codex thread: <code>{thread.threadId}</code>
+              </p>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => void refresh(thread.threadId).catch(report)}
+              >
+                Refresh ticket conversation
+              </button>
+            </>
+          )}
+        </ChatDialog>
+      </div>
       {loading && <p>Loading ticket conversation…</p>}
       {error && <p role="alert">{error}</p>}
       {thread?.state === "uncertain" && (
@@ -419,13 +520,9 @@ function TicketConversation({ ticket }: { ticket: Data }) {
         aria-label="Ticket messages"
         ref={chatScroll.viewport}
         onScroll={chatScroll.onScroll}
-        style={{
-          maxHeight: "50vh",
-          overflowY: "auto",
-          overflowWrap: "anywhere",
-        }}
+        className="contextual-chat-messages"
       >
-        <div ref={chatScroll.content}>
+        <div className="contextual-chat-transcript" ref={chatScroll.content}>
           {turns.map((turn) => (
             <div key={turn.id}>
               <AttachmentList items={turn.leamAttachments || []} />
@@ -449,6 +546,18 @@ function TicketConversation({ ticket }: { ticket: Data }) {
                       className="message assistant"
                     >
                       <strong>Codex</strong>
+                      <div className="prose markdown">
+                        <ReactMarkdown
+                          components={{
+                            a: ({ node: _node, ...props }) => (
+                              <ArtifactLink {...props} />
+                            ),
+                          }}
+                          remarkPlugins={[remarkGfm]}
+                        >
+                          {item.text || ""}
+                        </ReactMarkdown>
+                      </div>
                       {item.text?.trim() && thread?.threadId && (
                         <ReadAloud
                           text={item.text}
@@ -461,11 +570,6 @@ function TicketConversation({ ticket }: { ticket: Data }) {
                           }}
                         />
                       )}
-                      <div className="prose markdown">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {item.text || ""}
-                        </ReactMarkdown>
-                      </div>
                     </article>
                   );
                 if (item.type === "reasoning") return null;
@@ -492,23 +596,6 @@ function TicketConversation({ ticket }: { ticket: Data }) {
       )}
       {activeTurnId && (
         <p role="status">Codex is working… You can send a follow-up.</p>
-      )}
-      {thread?.threadId && (
-        <>
-          <details>
-            <summary>Ticket session</summary>
-            <p>
-              Codex thread: <code>{thread.threadId}</code>
-            </p>
-          </details>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => void refresh(thread.threadId).catch(report)}
-          >
-            Refresh ticket conversation
-          </button>
-        </>
       )}
       {pending.current && !busy && (
         <div>
@@ -539,23 +626,23 @@ function TicketConversation({ ticket }: { ticket: Data }) {
         }}
       >
         <AttachmentComposer
+          compact
           items={files.items}
           onChange={files.change}
           disabled={busy || !!pending.current}
           onBusyChange={setUploading}
         />
-        <label>
-          Message about this update
-          <textarea
-            rows={2}
-            value={text}
-            onChange={(event) => {
-              stopConversation();
-              stopRecognition();
-              draft(event.target.value);
-            }}
-          />
-        </label>
+        <textarea
+          aria-label={label}
+          placeholder="Message Codex…"
+          rows={2}
+          value={text}
+          onChange={(event) => {
+            stopConversation();
+            stopRecognition();
+            draft(event.target.value);
+          }}
+        />
         <VoiceComposer
           threadId={`ticket:${ticket.id}`}
           playbackSource={{
@@ -603,7 +690,9 @@ function TicketConversation({ ticket }: { ticket: Data }) {
           }))}
         />
         <button
-          className="primary"
+          className="primary send"
+          aria-label={busy ? "Sending to Codex" : "Send to Codex"}
+          title={busy ? "Sending to Codex" : "Send to Codex"}
           disabled={
             loading ||
             busy ||
@@ -612,7 +701,7 @@ function TicketConversation({ ticket }: { ticket: Data }) {
             thread?.state === "uncertain"
           }
         >
-          {busy ? "Sending…" : "Send to Codex"}
+          <ArrowUp size={20} aria-hidden="true" />
         </button>
       </form>
     </section>

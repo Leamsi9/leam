@@ -59,7 +59,8 @@ def setup(tmp_path, handler):
         )
         inspector = companion_factory.call_args.args[3]
         companion_factory.assert_called_once_with(
-            app.state.store, runtime, codex, inspector, agenda=app.state.agenda
+            app.state.store, runtime, codex, inspector, agenda=app.state.agenda,
+            jobs=app.state.background_jobs
         )
         assert inspector.store is app.state.store
         assert inspector.runtime is runtime
@@ -446,3 +447,43 @@ def test_stop_retry_upgrades_rejected_legacy_reason_without_new_action(tmp_path)
             == received[0]
         )
         assert len(received) == 1
+
+
+def test_reconciliation_wakes_once_for_terminal_run_not_stream_chunks(tmp_path):
+    from unittest.mock import Mock
+
+    frames = []
+
+    def event(items):
+        return (
+            "event: projection_update\ndata: "
+            + json.dumps({"state": {"thread_id": "thread-a", "items": items}})
+            + "\n\n"
+        )
+
+    frames.append(": keepalive\n\n")
+    frames.extend(
+        event([{"text": {"run_id": "a", "body": "partial"}}]) for _ in range(50)
+    )
+    final = {"run_status": {"run_id": "a", "status": "completed"}}
+    frames.extend(
+        event([final, {"text": {"run_id": "b", "body": "more"}}]) for _ in range(50)
+    )
+    frames.append(
+        event([final, {"text": {"run_id": "b", "finalized": True, "body": "done"}}])
+    )
+
+    def handle(request):
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content="".join(frames)
+        )
+
+    with setup(tmp_path, handle) as client:
+        login(client)
+        watcher = client.app.state.agenda.reconciliation
+        watcher.notify = Mock()
+        response = client.get("/api/companion/threads/thread-a/events")
+        assert response.status_code == 200
+        assert response.text.count("event: projection_update") == 101
+        assert watcher.notify.call_count == 2
+        watcher.notify.assert_called_with("thread-a")

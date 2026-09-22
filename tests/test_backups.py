@@ -223,9 +223,8 @@ def test_duplicate_entries_executable_schema_and_expanded_size_are_rejected(tmp_
     archive = manager.path(manager.create()["id"])
     duplicate = tmp_path / "duplicate.zip"
     duplicate.write_bytes(archive.read_bytes())
-    with zipfile.ZipFile(duplicate, "a") as file:
-        with pytest.warns(UserWarning):
-            file.writestr("accounts-key", b"a" * 32)
+    with zipfile.ZipFile(duplicate, "a") as file, pytest.warns(UserWarning):
+        file.writestr("accounts-key", b"a" * 32)
     with pytest.raises(ValueError, match="duplicate"):
         restore(duplicate, tmp_path / "duplicate-target", source)
     huge = tmp_path / "huge.zip"
@@ -239,6 +238,9 @@ def test_duplicate_entries_executable_schema_and_expanded_size_are_rejected(tmp_
         db.execute(
             "CREATE TRIGGER unsupported AFTER INSERT ON events BEGIN DELETE FROM sessions; END"
         )
+    # Daily reuse deliberately retains the earlier valid snapshot. Inspect a new
+    # day to exercise the current database export rejection.
+    manager.clock = lambda: archive.stat().st_mtime + 86400
     with pytest.raises(ValueError, match="schema"):
         manager.create()
 
@@ -300,3 +302,46 @@ def test_restore_rejects_unusable_identity_and_schema_with_valid_digests(
     with pytest.raises(ValueError):
         restore(bad, target, source)
     assert not target.exists()
+
+
+def test_background_job_schema_and_encrypted_payload_round_trip(tmp_path):
+    from uuid import uuid4
+
+    from leam_api.background_jobs import initialize
+    from leam_api.backups import validate_database, validate_vault
+
+    source = tmp_path / "source"
+    store = prepared(source)
+    initialize(store)
+    identity = str(uuid4())
+    sealed = Vault(source).seal(
+        "background:" + identity,
+        {"task": "Private report", "context": "Minimal", "result": "Done"},
+    )
+    with store.connect() as db:
+        db.execute(
+            "INSERT INTO background_jobs VALUES (?,?,?,NULL,'queued',1,'{}',?,1,1)",
+            (identity, "fingerprint", "parent", sealed),
+        )
+    manager = Backups(store)
+    archive = manager.path(manager.create()["id"])
+    target = tmp_path / "restored"
+    restore(archive, target, source)
+    restored = Store(target)
+    with restored.connect() as db:
+        saved = db.execute(
+            "SELECT sealed FROM background_jobs WHERE id=?", (identity,)
+        ).fetchone()[0]
+    assert (
+        Vault(target).open("background:" + identity, saved)["task"] == "Private report"
+    )
+    # Correct schema must not hide an invalid encrypted payload/key pairing.
+    with store.connect() as db:
+        db.execute("UPDATE background_jobs SET sealed='invalid'")
+    # Validation consumes an immutable archive database, not a live WAL file.
+    corrupted_snapshot = tmp_path / "corrupted.sqlite3"
+    with store.connect() as current, sqlite3.connect(corrupted_snapshot) as snapshot:
+        current.backup(snapshot)
+    validate_database(corrupted_snapshot)
+    with pytest.raises(ValueError):
+        validate_vault(corrupted_snapshot, (source / "accounts-key").read_bytes())

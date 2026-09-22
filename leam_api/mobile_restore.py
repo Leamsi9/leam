@@ -1,7 +1,6 @@
 """Durable candidate-only restore controller, independent of the product database."""
 
 import asyncio
-import hashlib
 import json
 import tempfile
 import time
@@ -9,7 +8,15 @@ from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
-from .backups import MAX_BYTES, Backups, private_read, restore, unpack
+from .backups import (
+    ARCHIVE_OVERHEAD,
+    MAX_BYTES,
+    Backups,
+    private_copy,
+    private_read,
+    restore,
+    unpack,
+)
 from .candidate_deployment import (
     atomic_json,
     digest,
@@ -129,20 +136,20 @@ class RestoreController:
                 "Running runtime or host ceiling changed; operator must update the verified descriptor"
             )
 
-    def _validated_archive(self, value, backup_id):
+    def _validated_archive(self, value, backup_id, stable_archive=None):
         directory = Path(value["dataDirectory"]) / "backups"
         private_directory(directory)
         source = directory / (uuid_value(backup_id) + ".zip")
         # Open a private regular file without following symlinks, then validate a
         # stable private copy. A replacement of the original cannot race extraction.
-        content = private_read(source, MAX_BYTES + 1024 * 1024)
         with tempfile.TemporaryDirectory(
             prefix=".verify-", dir=self.directory
         ) as temporary:
             root = Path(temporary)
-            archive = root / "archive.zip"
-            archive.write_bytes(content)
-            archive.chmod(0o600)
+            archive = (
+                stable_archive if stable_archive is not None else root / "archive.zip"
+            )
+            metadata = private_copy(source, archive, MAX_BYTES + ARCHIVE_OVERHEAD)
             target = root / "data"
             target.mkdir(mode=0o700)
             unpack(archive, target)
@@ -150,12 +157,12 @@ class RestoreController:
                 raise ValueError(
                     "Backup belongs to a different MCP installation identity"
                 )
-        return hashlib.sha256(content).hexdigest(), content
+        return metadata["sha256"]
 
     async def preview(self, backup_id):
         value = self.deployment.read()
         await self._runtime(value)
-        archive_hash, _ = await blocking(self._validated_archive, value, backup_id)
+        archive_hash = await blocking(self._validated_archive, value, backup_id)
         token = digest(
             {
                 "operation": "restore",
@@ -253,6 +260,9 @@ class RestoreController:
                 raise ValueError(
                     "An uncertain operation needs explicit rollback before another restore"
                 )
+            admission = getattr(self.services, "ensure_drained", None)
+            if admission is not None:
+                await admission()
             preview = await (
                 self.preview(target_id)
                 if operation == "restore"
@@ -313,38 +323,36 @@ class RestoreController:
                 target = self.deployment.roots.data / (
                     "restored-" + record["requestId"]
                 )
-                # Bind again to the archive inspected under the operation lock.
-                archive_hash, content = await blocking(
-                    self._validated_archive, before, record["backupId"]
-                )
-                expected = digest(
-                    {
-                        "operation": "restore",
-                        "descriptor": before,
-                        "backupId": record["backupId"],
-                        "archiveSha256": archive_hash,
-                    }
-                )
-                actual = digest(
-                    {
-                        "operation": "restore",
-                        "target": record["backupId"],
-                        "previewToken": expected,
-                    }
-                )
-                if actual != record["fingerprint"]:
-                    raise ValueError("Backup changed after confirmation")
-                self._save(
-                    record,
-                    "restoring",
-                    "Saving a fresh safety backup and restoring into a new private directory.",
-                )
                 with tempfile.TemporaryDirectory(
                     prefix=".restore-", dir=self.directory
                 ) as temporary:
                     archive = Path(temporary) / "archive.zip"
-                    archive.write_bytes(content)
-                    archive.chmod(0o600)
+                    # Bind again to the archive inspected under the operation lock.
+                    archive_hash = await blocking(
+                        self._validated_archive, before, record["backupId"], archive
+                    )
+                    expected = digest(
+                        {
+                            "operation": "restore",
+                            "descriptor": before,
+                            "backupId": record["backupId"],
+                            "archiveSha256": archive_hash,
+                        }
+                    )
+                    actual = digest(
+                        {
+                            "operation": "restore",
+                            "target": record["backupId"],
+                            "previewToken": expected,
+                        }
+                    )
+                    if actual != record["fingerprint"]:
+                        raise ValueError("Backup changed after confirmation")
+                    self._save(
+                        record,
+                        "restoring",
+                        "Saving a fresh safety backup and restoring into a new private directory.",
+                    )
                     result = await blocking(
                         restore, archive, target, Path(before["dataDirectory"])
                     )

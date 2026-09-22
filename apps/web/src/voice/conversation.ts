@@ -1,12 +1,14 @@
 import { playback } from "./playback";
-import type { PlaybackTarget } from "./playback-source";
-import { browserInput, stopSpeech, type SpeechInput } from "./speech";
+import { afterReplyBaseline, type PlaybackTarget, type ReplyBaseline } from "./playback-source";
+import { createSpeechInput, stopSpeech, type SpeechInput } from "./engines";
 
 export type Receipt = {
   outcome: "submitted" | "already_submitted" | "deferred_busy";
   // With autoReply=false this is the associated existing run, never a new reply promise.
   run_id: string;
   autoReply?: boolean;
+  readoutId?: string;
+  readoutBaseline?: ReplyBaseline;
 };
 export type PhoneState = {
   phase:
@@ -21,6 +23,7 @@ export type PhoneState = {
   notice: string;
   preview: string;
   runId?: string;
+  activeUntil?: number;
 };
 export class PhoneConversation {
   state: PhoneState = { phase: "off", notice: "", preview: "" };
@@ -28,10 +31,14 @@ export class PhoneConversation {
   private captureId = 0;
   private input: SpeechInput | null = null;
   private playbackId: number | null = null;
+  private replyBaseline?: ReplyBaseline;
   private quiet?: ReturnType<typeof setTimeout>;
   private idle?: ReturnType<typeof setTimeout>;
   private watchdog?: ReturnType<typeof setTimeout>;
   private restart?: ReturnType<typeof setTimeout>;
+  private recycle?: ReturnType<typeof setTimeout>;
+  private expiry?: ReturnType<typeof setTimeout>;
+  private activeUntil = 0;
   private language = "en-GB";
   private pauseMs = 4000;
   private sealed: string[] = [];
@@ -50,6 +57,7 @@ export class PhoneConversation {
     private recover: (text: string) => void,
     private blocked: () => boolean,
     private source: () => Omit<PlaybackTarget, "runId">,
+    private replyPending: () => boolean = () => false,
   ) {}
   private change(patch: Partial<PhoneState>) {
     this.state = { ...this.state, ...patch };
@@ -60,17 +68,21 @@ export class PhoneConversation {
     clearTimeout(this.idle);
     clearTimeout(this.watchdog);
     clearTimeout(this.restart);
+    clearTimeout(this.recycle);
   }
   stop(notice = "") {
     this.generation++;
     this.readoutDone = false;
     this.captureId++;
     this.timers();
+    clearTimeout(this.expiry);
+    this.activeUntil = 0;
     this.input?.cancel();
     this.input = null;
     if (this.playbackId !== null) playback.stop(this.playbackId);
     this.playbackId = null;
-    this.change({ phase: "off", notice, preview: "", runId: undefined });
+    this.replyBaseline = undefined;
+    this.change({ phase: "off", notice, preview: "", runId: undefined, activeUntil: undefined });
   }
   detach() {
     this.playbackId = null;
@@ -82,7 +94,7 @@ export class PhoneConversation {
     if (recover && preview && !this.draft()) this.recover(preview);
     this.change({ phase: "paused", notice, preview });
   }
-  start(language: string, pauseMs = 4000) {
+  start(language: string, pauseMs = 4000, mode: "conversation" | "active" = "conversation") {
     if (this.blocked() || this.draft().trim()) {
       this.change({
         phase: "paused",
@@ -96,7 +108,20 @@ export class PhoneConversation {
     this.language = language;
     this.pauseMs = pauseMs;
     this.playedRuns.clear();
+    if (mode === "active") {
+      this.activeUntil = Date.now() + 300000;
+      this.change({ activeUntil: this.activeUntil });
+      this.expiry = setTimeout(() => this.expireActive(true), 300000);
+    }
     this.newTurn();
+  }
+  private expireActive(force = false) {
+    if (!this.activeUntil || (!force && Date.now() < this.activeUntil)) return false;
+    const recover = ["starting", "listening", "finalizing"].includes(this.state.phase);
+    if (recover && this.preview())
+      this.pause("Active listening ended after 5 minutes.", true);
+    else this.stop("Active listening ended after 5 minutes.");
+    return true;
   }
   interruptReadout() {
     if (this.state.phase !== "speaking") return;
@@ -116,6 +141,7 @@ export class PhoneConversation {
       .trim();
   }
   private newTurn() {
+    if (this.expireActive()) return;
     if (this.draft().trim() || this.blocked()) {
       this.pause(
         "Your draft is preserved. Review it before resuming conversation.",
@@ -144,7 +170,7 @@ export class PhoneConversation {
     // At the maximum pause, final speech and inactivity share a deadline.
     // Finalization wins so recognized text is never discarded as no-input.
     if (
-      this.idleDeadline &&
+      !this.activeUntil && this.idleDeadline &&
       (!this.quietDeadline || this.idleDeadline < this.quietDeadline)
     )
       this.idle = setTimeout(
@@ -163,6 +189,7 @@ export class PhoneConversation {
       );
   }
   private capture() {
+    if (this.expireActive()) return;
     if (!["starting", "listening"].includes(this.state.phase)) return;
     if (document.hidden) {
       this.stop("Conversation stopped while the app was hidden.");
@@ -183,7 +210,7 @@ export class PhoneConversation {
     this.final = "";
     this.interim = "";
     this.evidence = "";
-    const input = browserInput();
+    const input = createSpeechInput();
     this.input = input;
     clearTimeout(this.watchdog);
     this.watchdog = setTimeout(() => {
@@ -196,12 +223,37 @@ export class PhoneConversation {
     try {
       input.start(this.language, (event) => {
         if (generation !== this.generation || id !== this.captureId) return;
+        if (this.expireActive()) return;
         if (event.type === "started") {
           if (this.state.phase === "finalizing") return;
           clearTimeout(this.watchdog);
           this.change({ phase: "listening", notice: "Listening…" });
           if (!this.idleDeadline) this.idleDeadline = Date.now() + 10000;
           this.arm();
+          if (this.activeUntil && input.maxCaptureMs) {
+            clearTimeout(this.recycle);
+            this.recycle = setTimeout(() => {
+              if (generation !== this.generation || id !== this.captureId || this.expireActive()) return;
+              if (this.preview()) {
+                // Do not chop an in-progress utterance to reset an adapter cap.
+                // Ordinary silence finalization can still win before this bound.
+                this.recycle = setTimeout(() => {
+                  if (generation === this.generation && id === this.captureId)
+                    this.pause("Long speech was kept as a draft. Review it before restarting active listening.", true);
+                }, 15000);
+                return;
+              }
+              // End this bounded adapter stream, retaining its finalized words
+              // in `sealed`; ended() opens the next stream under the same lease.
+              this.change({ phase: "starting", notice: "Restarting microphone…" });
+              this.watchdog = setTimeout(() => {
+                if (generation === this.generation && id === this.captureId)
+                  this.pause("Microphone did not finalize. Review your recovered draft.", true);
+              }, 5000);
+              try { input.finish(); }
+              catch { this.pause("Speech could not finish. Review your draft.", true); }
+            }, input.maxCaptureMs);
+          }
         } else if (event.type === "text") {
           this.final = event.finalText.trim();
           this.interim = event.interimText.trim();
@@ -223,7 +275,7 @@ export class PhoneConversation {
             this.ended(generation, id);
           } else this.pause(event.message, true);
         } else this.ended(generation, id);
-      });
+      }, { continuous: true });
     } catch (error) {
       this.pause(
         error instanceof Error
@@ -235,8 +287,10 @@ export class PhoneConversation {
   }
   private ended(generation: number, id: number) {
     if (generation !== this.generation || id !== this.captureId) return;
+    if (this.expireActive()) return;
     this.input = null;
     clearTimeout(this.watchdog);
+    clearTimeout(this.recycle);
     const nextCapture = ++this.captureId;
     if (this.interim) {
       this.pause(
@@ -252,13 +306,18 @@ export class PhoneConversation {
       void this.send();
       return;
     }
-    this.change({ phase: "listening", preview: this.preview() });
+    this.change({
+      phase: this.activeUntil ? "starting" : "listening",
+      ...(this.activeUntil ? { notice: "Restarting microphone…" } : {}),
+      preview: this.preview(),
+    });
     this.restart = setTimeout(() => {
       if (generation === this.generation && nextCapture === this.captureId)
         this.capture();
     }, 150);
   }
   private finish() {
+    if (this.expireActive()) return;
     if (!["listening", "starting"].includes(this.state.phase)) return;
     this.timers();
     this.change({ phase: "finalizing", notice: "Finishing speech…" });
@@ -281,12 +340,17 @@ export class PhoneConversation {
     }
   }
   private async send() {
+    if (this.expireActive()) return;
     if (this.state.phase !== "finalizing") return;
     this.timers();
     this.input?.cancel();
     this.input = null;
     this.captureId++;
     const text = this.sealed.join(" ").trim();
+    if (this.activeUntil && !/[\p{L}\p{N}]/u.test(text)) {
+      this.newTurn();
+      return;
+    }
     if (!text) {
       this.pause("No final speech was recognized. Tap Resume conversation.");
       return;
@@ -309,13 +373,15 @@ export class PhoneConversation {
         );
         return;
       }
-      if (this.playedRuns.has(receipt.run_id)) {
+      const readoutKey = receipt.readoutId || receipt.run_id;
+      if (this.playedRuns.has(readoutKey)) {
         this.pause(
           "This reply was already read. Review the conversation before continuing.",
         );
         return;
       }
-      this.playedRuns.add(receipt.run_id);
+      this.playedRuns.add(readoutKey);
+      this.replyBaseline = receipt.readoutBaseline;
       this.change({
         phase: "waitingReply",
         notice: "Waiting for reply…",
@@ -323,7 +389,8 @@ export class PhoneConversation {
         preview: "",
       });
       this.playbackId = playback.start(
-        { ...this.source(), runId: receipt.run_id, automatic: true },
+        { ...this.source(), runId: receipt.run_id, automatic: true,
+          readoutId: receipt.readoutId, baseline: receipt.readoutBaseline },
         "",
         false,
         (state) => {
@@ -356,7 +423,7 @@ export class PhoneConversation {
   }
   readoutReady() {
     if (!this.readoutDone) return;
-    if (this.blocked()) {
+    if (this.blocked() || this.replyPending()) {
       this.change({
         phase: "waitingReply",
         notice: "Checking response completion…",
@@ -384,11 +451,12 @@ export class PhoneConversation {
     const message = messages[messages.length - 1];
     if (failed)
       playback.update(this.playbackId, { text: "", final: true, failed: true });
-    else if (message)
-      playback.update(this.playbackId, {
-        text: message.content,
-        final: terminal && message.final,
-      });
+    else if (message) {
+      const text = afterReplyBaseline(message.message_id, message.content, this.replyBaseline);
+      playback.update(this.playbackId, text === null
+        ? { text: "", final: true, failed: true }
+        : { text, final: terminal && message.final });
+    }
   }
 }
 

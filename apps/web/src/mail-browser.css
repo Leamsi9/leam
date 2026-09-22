@@ -1,0 +1,25 @@
+.mail-browser-entry { align-self: flex-end; margin: 6px 0; flex-shrink: 0; }
+.mail-browser-dialog { width: min(820px, calc(100vw - 24px)); max-width: none; max-height: calc(100dvh - 24px); padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); color: var(--ink); }
+.mail-browser-dialog[open] { display: flex; flex-direction: column; }
+.mail-browser-dialog::backdrop { background: var(--overlay); }
+.mail-browser-dialog > header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--line); flex-shrink: 0; gap: 8px; }
+.mail-browser-dialog h2 { margin: 0; font: 26px/1.2 Georgia, serif; }
+.mail-browser-dialog small { color: var(--sub); }
+.mail-browser-body { overflow: auto; padding: 16px 18px 24px; min-height: 0; }
+.mail-browser-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.mail-browser-tabs [aria-pressed=true] { background: var(--semantic-personal-solid); color: var(--on-accent); }
+.mail-browser-dialog :is(button, summary, select, input:not([type=checkbox])) { min-height: 44px; }
+.mail-browser-dialog label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; font-size: 14px; }
+.mail-browser-dialog :is(input, select, textarea) { width: 100%; min-width: 0; box-sizing: border-box; font-size: 16px; }
+.mail-browser-dialog .mail-checkbox { flex-direction: row; align-items: center; min-height: 44px; }
+.mail-checkbox input { width: 20px; height: 20px; }
+.mail-browser-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mail-results { display: grid; gap: 8px; margin: 14px 0; }
+.mail-result { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 4px; white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.mail-reading, .mail-draft-editor { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 12px; overflow-wrap: anywhere; }
+.mail-reading pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.6 system-ui, sans-serif; }
+.mail-browser-dialog fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.mail-browser-dialog summary { display: flex; align-items: center; cursor: pointer; }
+.mail-browser-dialog summary::after { content: "＋"; margin-left: 8px; }
+.mail-browser-dialog details[open] > summary::after { content: "−"; }
+@media (max-width: 600px) { .mail-browser-dialog { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); } .mail-browser-body, .mail-browser-dialog > header { padding-inline: 12px; } .mail-browser-tabs > button { flex: 1; } }

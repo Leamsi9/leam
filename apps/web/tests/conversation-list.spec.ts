@@ -225,7 +225,7 @@ test("Coding uses separate open/rename controls and confirms native deletion sem
 });
 test("mobile controls fit and list scroll does not consume conversation area", async ({
   page,
-}, testInfo) => {
+}) => {
   await setup(page);
   for (const width of [360, 390, 1440]) {
     await page.setViewportSize({ width, height: 844 });
@@ -246,7 +246,10 @@ test("mobile controls fit and list scroll does not consume conversation area", a
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
-    const row = (await page.locator(".conversation-row").first().boundingBox())!;
+    const row = (await page
+      .locator(".conversation-row")
+      .first()
+      .boundingBox())!;
     const title = (await page
       .getByRole("button", { name: "Rename First conversation", exact: true })
       .boundingBox())!;
@@ -254,7 +257,7 @@ test("mobile controls fit and list scroll does not consume conversation area", a
   }
   await page.setViewportSize({ width: 360, height: 844 });
   await page.screenshot({
-    path: testInfo.outputPath("conversation-list-360.png"),
+    path: "/tmp/leam-build-control/conversation-list-360.png",
   });
 });
 
@@ -378,4 +381,88 @@ test("deleting a Coding parent retires selected-child display while preserving u
   await navigate(page, "Today");
   await navigate(page, "Coding");
   await expect(page.getByLabel("Message Codex")).toHaveCount(0);
+});
+
+test("Coding distinguishes exact IDs, protected Updates links and explicit Leam scope", async ({
+  page,
+}) => {
+  await setup(page, "coding");
+  await page.route("**/api/codex/threads", async (route) =>
+    route.fulfill({
+      json: {
+        data: [
+          { id: "first-11111111", name: "Same title", source: "vscode" },
+          { id: "first-11111111", name: "Same title", source: "vscode" },
+          { id: "second-22222222", name: "Same title", source: "cli" },
+          {
+            id: "ticket-33333333",
+            name: "Ticket work",
+            leamPurpose: "update",
+            leamDeleteProtected: true,
+            leamDeleteReason:
+              "Linked to an Updates ticket; deletion is protected.",
+          },
+        ],
+        nextCursor: "older",
+      },
+    }),
+  );
+  await page.reload();
+  await expect(page.locator(".conversation-row")).toHaveCount(3);
+  await expect(page.getByText("Codex editor · ID 11111111")).toBeVisible();
+  await expect(page.getByText("Codex CLI · ID 22222222")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Delete Ticket work", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("Linked to an Updates ticket; deletion is protected."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Rename Ticket work", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByLabel("Session catalog", { exact: true })
+    .selectOption("leam");
+  await expect(page.locator(".conversation-row")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "More conversations" }),
+  ).toBeVisible();
+  await page.getByLabel("Session catalog", { exact: true }).selectOption("all");
+  await expect(page.locator(".conversation-row")).toHaveCount(3);
+});
+
+test("a failed native delete keeps its row and presents the precise error without retry", async ({
+  page,
+}) => {
+  await setup(page, "coding");
+  let attempts = 0;
+  await page.route("**/api/codex/threads/a", async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    attempts++;
+    await route.fulfill({
+      status: 501,
+      json: {
+        detail:
+          "The installed Codex does not support permanent conversation deletion. Nothing was deleted.",
+      },
+    });
+  });
+  await page
+    .getByRole("button", { name: "Delete First conversation", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Delete conversation",
+    exact: true,
+  });
+  await dialog
+    .getByRole("button", { name: "Delete conversation", exact: true })
+    .click();
+  await expect(dialog.getByRole("alert")).toContainText(
+    "does not support permanent",
+  );
+  expect(attempts).toBe(1);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Open First conversation", exact: true }),
+  ).toBeVisible();
 });

@@ -84,5 +84,10 @@ def coding_context() -> dict:
         + str(Path.home() / ".local/share/leam-next/coding-deployment.json")
         + ". Verify current source/artifact and deployment ownership there; do not guess the target, overwrite another active deployment, "
         "or deploy a bare scaffold. Keep private descriptor values, credentials and local operational history out of public Git."
+        "\nRequested deliverables belong in private Leam Resources: use the deployed release's "
+        "python -m leam_api.artifacts --data-dir <installation-data-dir> --id <versioned-id> "
+        "--title <title> --kind <kind> --file <reviewed-output>. Resolve the installation from "
+        "its deployment descriptor; publish only intended outputs, never credentials, arbitrary "
+        "private files or raw transcripts. Return the publication receipt's authenticated url."
     )
     return {"leam.agent-protocols": {"kind": "application", "value": value}}

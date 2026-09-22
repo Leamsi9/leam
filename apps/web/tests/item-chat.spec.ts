@@ -70,9 +70,18 @@ for (const width of [390, 1440])
     await page.getByText("Chat about Walk", { exact: true }).click();
     const panel = page.getByRole("region", { name: "Chat about Walk" });
     await expect(panel.getByLabel("Message Leam")).toBeVisible();
+    await panel
+      .getByRole("button", { name: "Companion chat options", exact: true })
+      .click();
     await expect(
       panel.getByText(/Configured model: gpt-6-astra/),
     ).toBeVisible();
+    await panel
+      .getByRole("button", {
+        name: "Close Companion chat options",
+        exact: true,
+      })
+      .click();
     await expect(
       panel.getByRole("button", { name: "Dictate", exact: true }),
     ).toBeVisible();

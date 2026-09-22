@@ -186,7 +186,8 @@ def test_ticket_turn_references_deployed_baseline_instead_of_old_main(
         )["additionalContext"]["leam.update-ticket"]["value"]
         assert source in context and str(release) in context
         assert '"repositoryPath"' in context and '"currentDeploymentSource"' in context
-        assert "default branch may still be the old foundation" in context
+        assert "from the verified current deployment source" in context
+        assert "Never edit an immutable release or active build worktree" in context
 
 
 def test_ticket_stream_cursor_replays_own_latest_turn_start_with_bounded_fallback(

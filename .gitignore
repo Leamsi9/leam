@@ -33,3 +33,7 @@ client_secret*.json
 # Local dependency links as well as directories.
 .venv
 node_modules
+
+# Usage exports and raw session recordings contain private activity.
+/tokenops/usage_data/
+*.jsonl

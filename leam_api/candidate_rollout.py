@@ -14,6 +14,7 @@ class ReleaseServices(FixedRestoreServices):
     """Ordinary app releases preserve the current runtime and recovery processes."""
 
     async def stop(self):
+        await self.ensure_drained()
         await self.control._systemctl(
             "stop", *(SERVICES[name][1] for name in ("app", "mcp"))
         )

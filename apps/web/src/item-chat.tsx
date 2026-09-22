@@ -1,3 +1,4 @@
+import "./contextual-chat.css";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { Companion } from "./companion";
@@ -14,7 +15,7 @@ export function ItemChat(props: Props) {
   const [open, setOpen] = useState(false);
   return (
     <details
-      className="item-chat"
+      className="contextual-chat item-chat"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>Chat about {props.title}</summary>
@@ -45,7 +46,11 @@ function ItemConversation({ kind, id, title, changed }: Props) {
     };
   }, [kind, id, retry]);
   return (
-    <div role="region" aria-label={`Chat about ${title}`}>
+    <div
+      className="contextual-chat-body"
+      role="region"
+      aria-label={`Chat about ${title}`}
+    >
       {error && (
         <p role="alert">
           {error}{" "}

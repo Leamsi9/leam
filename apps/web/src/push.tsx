@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useSettingsActive } from "./settings-lifecycle";
+import { useEffect, useState, useRef } from "react";
 import { api, type Data } from "./api";
 
 function bytes(value: string) {
@@ -20,6 +21,9 @@ async function deviceId(subscription: PushSubscription) {
     .join("");
 }
 export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
+  const panelActive = useSettingsActive();
+  const contactLoaded = useRef(false);
+  const acting = useRef(false);
   const [status, setStatus] = useState<Data | null>(null),
     [contact, setContact] = useState(""),
     [name, setName] = useState("My phone"),
@@ -36,11 +40,12 @@ export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
     return result;
   };
   useEffect(() => {
+    if (!panelActive) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     load()
       .then((r) => {
-        if (!stopped) setContact(r.contact || "");
+        if (!stopped && !contactLoaded.current) { setContact(r.contact || ""); contactLoaded.current = true; }
       })
       .catch(fail);
     async function poll() {
@@ -56,8 +61,10 @@ export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
       stopped = true;
       clearTimeout(timer);
     };
-  }, []);
+  }, [panelActive]);
   async function act(operation: () => Promise<void>) {
+    if (acting.current) return;
+    acting.current = true;
     setBusy(true);
     setMessage("");
     try {
@@ -66,10 +73,12 @@ export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
     } catch (e) {
       fail(e);
     } finally {
+      acting.current = false;
       setBusy(false);
     }
   }
   async function enable() {
+    if (acting.current) return;
     // Request permission directly from the click gesture (required by mobile Safari).
     const permission = Notification.requestPermission();
     await act(async () => {
@@ -77,22 +86,33 @@ export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
         throw new Error(
           "Notifications were not allowed. Change this site's browser notification permission to enable them.",
         );
+      // Read fresh state: the worker may have expired this endpoint since render.
+      const current = await load();
+      const publicKey = bytes(current.publicKey);
       const registration = await navigator.serviceWorker.ready;
       let subscription = await registration.pushManager.getSubscription();
-      if (
-        subscription &&
-        String(
-          new Uint8Array(
-            subscription.options.applicationServerKey || new ArrayBuffer(0),
-          ),
-        ) !== String(bytes(status!.publicKey))
-      ) {
-        await subscription.unsubscribe();
-        subscription = null;
+      if (subscription) {
+        const id = await deviceId(subscription);
+        const expired = current.devices.some(
+          (device: Data) => device.id === id && device.state === "expired",
+        ) || (subscription.expirationTime !== null &&
+          subscription.expirationTime <= Date.now());
+        const changedKey = String(new Uint8Array(
+          subscription.options.applicationServerKey || new ArrayBuffer(0),
+        )) !== String(publicKey);
+        if (expired || changedKey) {
+          await subscription.unsubscribe();
+          // Do not register a stale endpoint if the browser failed to remove it.
+          if (await registration.pushManager.getSubscription())
+            throw new Error(
+              "The browser could not renew this notification subscription. Close other Leam tabs, then enable notifications again.",
+            );
+          subscription = null;
+        }
       }
       subscription ||= await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: bytes(status!.publicKey),
+        applicationServerKey: publicKey,
       });
       await api("/push/devices", "POST", {
         name,
@@ -123,7 +143,11 @@ export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
           aria-label="Push contact email"
           type="email"
           value={contact.replace(/^mailto:/, "")}
-          onChange={(e) => setContact("mailto:" + e.target.value)}
+          onChange={(e) => {
+            // A delayed first status read must not replace an edited draft.
+            contactLoaded.current = true;
+            setContact("mailto:" + e.target.value);
+          }}
         />
       </label>
       <p>
@@ -156,6 +180,11 @@ export function PushSettings({ fail }: { fail: (error: unknown) => void }) {
       >
         Enable notifications on this device
       </button>
+      <details><summary>Notification popups</summary>
+        <p>When Leam is visible, a small popup offers Open Today or Dismiss. System notifications also remain enabled for background delivery.</p>
+        <p>On Android, press and hold a delivered Leam notification, open its notification settings, and enable Alerting or Pop on screen if offered. Check Do Not Disturb too. Names vary by phone. Android and your browser control system banners; Leam cannot force them.</p>
+        <a href="https://developer.android.com/develop/ui/compose/notifications/channels" target="_blank" rel="noreferrer">About Android notification controls</a>
+      </details>
       {message && <p role="status">{message}</p>}
       {status?.automationHeld && (
         <p role="status">

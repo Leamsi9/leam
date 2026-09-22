@@ -90,3 +90,71 @@ def decorate(thread, handoff):
         "leamSourceThreadId": handoff.get("sourceThreadId"),
         "leamOrigin": "reviewed-companion-handoff",
     }
+
+
+def visible_threads(result):
+    """Filter only explicit native internal markers; never infer from text/title."""
+    rows = {}
+    hidden = 0
+    for row in result.get("data", []):
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        source = row.get("source")
+        internal_source = (
+            isinstance(source, dict) and ("subAgent" in source or "subagent" in source)
+        ) or (isinstance(source, str) and source.startswith("subAgent"))
+        if (
+            row.get("ephemeral") is True
+            or row.get("threadSource") in ("ambient_suggestions", "subagent")
+            or row.get("parentThreadId")
+            or internal_source
+        ):
+            hidden += 1
+            continue
+        rows[row["id"]] = row
+    return {**result, "data": list(rows.values()), "leamFilteredCount": hidden}
+
+
+def purpose_metadata(store, result):
+    """Existing exact-ID Leam receipts confer purpose, never inferred intention."""
+    ids = [row["id"] for row in result.get("data", [])]
+    linked = set()
+    if ids:
+        with store.connect() as db:
+            rows = db.execute(
+                "SELECT value FROM settings WHERE key GLOB 'ticket-chat:*' "
+                "AND json_valid(value) AND json_extract(value,'$.threadId') IN ("
+                + ",".join("?" for _ in ids)
+                + ")",
+                ids,
+            ).fetchall()
+        linked = {json.loads(row[0])["threadId"] for row in rows}
+    main = store.get("coding-main") or {}
+    decorated = []
+    for row in result.get("data", []):
+        item = dict(row)
+        if item.get("transport") == "ide-owner":
+            item.update(
+                leamPurpose="shared",
+                leamDeleteProtected=True,
+                leamDeleteReason="The shared coding owner is protected from deletion.",
+            )
+        elif item["id"] in linked:
+            item.update(
+                leamPurpose="update",
+                leamDeleteProtected=True,
+                leamDeleteReason="This conversation is linked to a build ticket and is protected from deletion here.",
+            )
+        elif item.get("leamOrigin") == "reviewed-companion-handoff":
+            item["leamPurpose"] = "handoff"
+        elif item.get("originator") == "leam":
+            # Creation client is known, but a human/QA/internal purpose is not.
+            item["leamPurpose"] = "leam-origin"
+        if item["id"] == main.get("threadId"):
+            item.update(
+                leamMain=True,
+                leamDeleteProtected=True,
+                leamDeleteReason="Main coordinates integration and deployment. Select another Main before deleting it.",
+            )
+        decorated.append(item)
+    return {**result, "data": decorated}

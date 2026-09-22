@@ -1,3 +1,4 @@
+from test_maintenance import AllowedDrain
 import asyncio
 import hashlib
 import json
@@ -334,7 +335,7 @@ def test_fixed_service_caller_stops_only_candidate_and_rejects_remaining_writer(
     async def scenario():
         _, _, deployment, _ = fixture(tmp_path)
         control = Control()
-        services = FixedRestoreServices(deployment, control)
+        services = FixedRestoreServices(deployment, control, drain=AllowedDrain())
         await services.stop()
         await services.start()
         assert control.calls[0] == (
@@ -565,7 +566,11 @@ def test_recovery_other_browser_cannot_restart_writers_during_restore(tmp_path):
     controller = RestoreController(deployment, HeldServices(runtime))
     control = Control()
     app = create_recovery_app(
-        roots.recovery, {"http://testserver"}, control=control, restore=controller
+        roots.recovery,
+        {"http://testserver"},
+        control=control,
+        restore=controller,
+        drain=AllowedDrain(),
     )
     headers = {"origin": "http://testserver"}
     with TestClient(app, client=("127.0.0.1", 4444)) as client:

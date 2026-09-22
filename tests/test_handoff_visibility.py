@@ -165,6 +165,9 @@ def test_later_native_page_decorates_handoffs_outside_discovery_window_without_r
         assert params == {
             "limit": 50,
             "sourceKinds": ["cli", "vscode", "appServer"],
+            "sortKey": "recency_at",
+            "sortDirection": "desc",
+            "archived": False,
             "cursor": "older",
         }
         return {"data": [{"id": "thread-0", "name": None}], "nextCursor": None}

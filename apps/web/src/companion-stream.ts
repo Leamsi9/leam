@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Data } from "./api";
+import { modelRecovery, type ModelRecovery } from "./model-recovery-data";
 
 export type LiveRun = {
   id: string;
@@ -9,6 +10,10 @@ export type LiveRun = {
   terminal: boolean;
   stopRequested: boolean;
   failed: boolean;
+  terminalStatus?: string;
+  recovery?: ModelRecovery;
+  approvalId?: string | null;
+  retrying?: boolean;
 };
 const terminal = new Set([
   "completed",
@@ -36,10 +41,12 @@ const eventNames = [
 // Canonical shapes: IronClaw WebChatV2EventFrame and ProductProjectionItem.
 export function useCompanionStream(thread: string, reconcile: () => void) {
   const [runs, setRuns] = useState<Record<string, LiveRun>>({});
+  const runThread = useRef(thread);
   const [connection, setConnection] = useState("Connecting to live progress…");
   const reconcileRef = useRef(reconcile);
   reconcileRef.current = reconcile;
   useEffect(() => {
+    runThread.current = thread;
     setRuns({});
     if (!thread) return;
     let stopped = false;
@@ -58,6 +65,7 @@ export function useCompanionStream(thread: string, reconcile: () => void) {
       if (frame.state?.thread_id && frame.state.thread_id !== thread) return;
       let shouldReconcile = false;
       const edits: { id: string; patch: Partial<LiveRun> }[] = [];
+      const retryStatuses = new Map<string, string>();
       function edit(id: unknown, patch: Partial<LiveRun>) {
         if (typeof id === "string" && id.length <= 128)
           edits.push({ id, patch });
@@ -70,12 +78,19 @@ export function useCompanionStream(thread: string, reconcile: () => void) {
             text: item.text.body.slice(0, 100000),
             textFinal: !!item.text.finalized,
           });
+        if (item.work_summary?.phase === "retrying" && modelRecovery(item.work_summary.model_recovery)) {
+          const recovery = modelRecovery(item.work_summary.model_recovery)!;
+          retryStatuses.set(item.work_summary.run_id, `Retrying model request (${recovery.retries_used}/${recovery.max_retries}). Waiting for model progress…`);
+        }
         if (item.work_summary)
           edit(item.work_summary.run_id, {
+            retrying: item.work_summary.phase === "retrying" && !!modelRecovery(item.work_summary.model_recovery),
             status:
               typeof item.work_summary.body === "string"
                 ? item.work_summary.body.slice(0, 500)
                 : "Working…",
+            ...(item.work_summary.phase === "retrying" && modelRecovery(item.work_summary.model_recovery)
+              ? { recovery: modelRecovery(item.work_summary.model_recovery) } : {}),
           });
         if (item.capability_activity) {
           const activity = item.capability_activity;
@@ -97,6 +112,8 @@ export function useCompanionStream(thread: string, reconcile: () => void) {
             ].includes(state.status);
           edit(state.run_id, {
             terminal: ended,
+            ...(ended ? { terminalStatus: state.status } : {}),
+            ...(["queued", "running", ...terminal].includes(state.status) ? { approvalId: null } : {}),
             failed,
             status: failed
               ? state.failure_summary?.slice(0, 500) ||
@@ -107,16 +124,22 @@ export function useCompanionStream(thread: string, reconcile: () => void) {
           });
           shouldReconcile ||= ended;
         }
-        if (item.gate)
+        if (item.gate) {
+          const approval = item.gate.gate_kind === "approval" &&
+            /^gate:approval-[a-f0-9-]{36}$/.test(item.gate.gate_ref || "")
+              ? item.gate.gate_ref.slice("gate:approval-".length) : null;
           edit(item.gate.run_id, {
-            status: "Waiting for your approval in runtime controls.",
+            approvalId: approval,
+            status: approval ? "Waiting for your approval." : "Waiting for runtime input.",
           });
+        }
       }
       if (frame.type === "final_reply") {
         edit(frame.reply?.turn_run_id, {
           text: frame.reply?.text?.slice(0, 100000) || "",
           textFinal: true,
           terminal: true,
+          terminalStatus: "completed",
           status: "Completed",
         });
         shouldReconcile = true;
@@ -139,6 +162,7 @@ export function useCompanionStream(thread: string, reconcile: () => void) {
           frame.response?.turn_run_id;
         edit(id, {
           terminal: true,
+          terminalStatus: frame.type,
           failed: true,
           status: `Response ${frame.type}.`,
         });
@@ -158,11 +182,24 @@ export function useCompanionStream(thread: string, reconcile: () => void) {
           // Replayed older progress must never resurrect a completed response.
           if (before.terminal && !patch.terminal && !patch.textFinal) continue;
           if (before.textFinal && patch.textFinal === false) continue;
+          if (patch.recovery && before.recovery && (
+            patch.recovery.retries_used < before.recovery.retries_used ||
+            patch.recovery.elapsed_ms < before.recovery.elapsed_ms
+          )) continue;
+          const newText = patch.text !== undefined && patch.text !== before.text;
+          const keepRetry = before.retrying && patch.retrying === undefined && !patch.terminal && !newText;
           next[id] = {
             ...before,
             ...patch,
+            ...(keepRetry ? { status: before.status } : {}),
+            ...(newText && patch.retrying === undefined && !patch.terminal ? { retrying: false, status: "Responding…" } : {}),
             stopRequested: patch.terminal ? false : before.stopRequested,
           };
+        }
+        // A snapshot may include historical tool activities after its current
+        // retry summary. Generic progress must not hide the typed retry phase.
+        for (const [id, status] of retryStatuses) {
+          if (next[id] && !next[id].terminal && !next[id].approvalId) next[id] = { ...next[id], status };
         }
         return Object.fromEntries(Object.entries(next).slice(-10));
       });
@@ -194,8 +231,17 @@ export function useCompanionStream(thread: string, reconcile: () => void) {
     };
   }, [thread]);
   return {
-    runs: Object.values(runs),
+    runs: runThread.current === thread ? Object.values(runs) : [],
     connection,
+    approvalResolved: (id: string, status: string, outcome: string) => {
+      setRuns((previous) => previous[id] ? { ...previous, [id]: {
+        ...previous[id], approvalId: null,
+        status: outcome === "cancelled" ? "Declined. Completed actions are not undone." : "Decision recorded. Continuing…",
+        terminal: ["Cancelled", "Completed", "Failed"].includes(status),
+        failed: status === "Cancelled" || status === "Failed",
+      } } : previous);
+      reconcileRef.current();
+    },
     stopAcknowledged: (id: string, status: string) => {
       setRuns((previous) =>
         previous[id] && !previous[id].terminal

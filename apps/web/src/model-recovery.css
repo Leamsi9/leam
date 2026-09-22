@@ -1,0 +1,15 @@
+.model-recovery {
+  margin-block: 6px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.model-recovery p {
+  margin-block: 4px;
+}
+.model-recovery .actions {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.model-recovery button {
+  min-height: 44px;
+}

@@ -84,6 +84,46 @@ class PrivateIdeCommands(PrivateIdeReader):
                 ) from error
             raise
 
+    async def update_settings(
+        self, owner, model, effort, expected_model, expected_effort, revalidate
+    ):
+        attempted = False
+        try:
+            async with self._connection(owner.thread_id) as connection:
+                if await connection.owner(owner.thread_id) != owner:
+                    raise SharedSessionError(
+                        "IDE owner changed; refresh model settings"
+                    )
+                revalidate()
+                attempted = True
+                response = await connection.request(
+                    "thread-follower-update-thread-settings",
+                    {
+                        "conversationId": owner.thread_id,
+                        "threadSettings": {"model": model, "effort": effort},
+                        "condition": {
+                            "ifModelEquals": expected_model,
+                            "ifEffortEquals": expected_effort,
+                        },
+                    },
+                    2,
+                    target_client_id=owner.client_id,
+                )
+                result = response.get("result")
+                if (
+                    response.get("handledByClientId") != owner.client_id
+                    or not isinstance(result, dict)
+                    or not isinstance(result.get("applied"), bool)
+                ):
+                    raise SharedSessionError("IDE settings acknowledgment is invalid")
+                return result
+        except (SharedSessionError, asyncio.CancelledError) as error:
+            if attempted:
+                raise SubmissionUncertain(
+                    "Model change delivery is uncertain; refresh settings"
+                ) from error
+            raise
+
     async def interrupt(self, owner: SessionOwner, turn_id: str) -> dict:
         if not isinstance(turn_id, str) or not 1 <= len(turn_id) <= 128:
             raise SharedSessionError("An exact active turn identity is required")

@@ -88,3 +88,34 @@ export async function syncAgendaMail(signal: AbortSignal) {
   }
   return `${completed} Gmail account${completed === 1 ? "" : "s"} synchronized.${failed ? ` ${failed} account${failed === 1 ? "" : "s"} could not sync; previous saved messages are retained. Check Email sources for details.` : ""}${eligible.length > 5 ? " Additional accounts remain; sync them in Email settings." : ""}`;
 }
+
+/** Replace Leam's saved mail view and decisions; Gmail remains read-only. */
+export async function rebuildAgendaMail(signal: AbortSignal) {
+  const overview = await api("/email", "GET", undefined, signal);
+  const eligible = (overview.accounts || []).filter(
+    (account: Data) =>
+      account.granted === true &&
+      ["never_synced", "ready", "stale", "error"].includes(account.state),
+  );
+  if (!eligible.length)
+    return "Enable or reconnect read-only Gmail access in Email settings before rebuilding.";
+  let completed = 0,
+    failed = 0;
+  for (const account of eligible.slice(0, 5)) {
+    if (signal.aborted) throw new DOMException("Stopped", "AbortError");
+    try {
+      const result = await api(
+        `/email/accounts/${encodeURIComponent(account.accountId)}/rebuild`,
+        "POST",
+        {},
+        signal,
+      );
+      if (result.state !== "ready" || result.error) failed++;
+      else completed++;
+    } catch (error) {
+      if (signal.aborted) throw error;
+      failed++;
+    }
+  }
+  return `${completed} Leam action inbox source${completed === 1 ? "" : "s"} rebuilt from up to 100 recent messages per connected Gmail account; classification is continuing. Gmail is unchanged.${failed ? ` ${failed} account${failed === 1 ? "" : "s"} could not rebuild; its previous saved view is retained.` : ""}${eligible.length > 5 ? " Additional accounts remain; rebuild them separately later." : ""}`;
+}

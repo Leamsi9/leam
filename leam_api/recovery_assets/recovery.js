@@ -45,7 +45,7 @@ function showServices(data) {
       button.disabled = busy;
       button.onclick = async () => {
         if (busy) return;
-        if (action === "restart" && !confirm(`Restart ${service.name}? Active work in this service may be interrupted.`)) return;
+        if (action === "restart" && !confirm(`Restart ${service.name}? Maintenance must be prepared first while accepted work finishes.`)) return;
         disable(true); notice(`${action === "start" ? "Starting" : "Restarting"} ${service.name}…`);
         try { showServices(await api(`/api/services/${encodeURIComponent(service.id)}/${action}`, "POST", {})); notice("Service manager completed the request. Current status is shown below."); }
         catch (error) { notice(`${error.message} Inspect status before retrying.`, true); }

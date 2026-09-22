@@ -53,3 +53,55 @@ the missing source; it never recreates the item. Deleting the native conversatio
 retains the binding and reports unavailability instead of silently replacing it.
 An explicit replacement-chat control is not yet implemented. Only the explicitly
 started voice conversation owns automatic replies/listening across open panels.
+
+## Capacity boards and card structure
+
+A capacity is the canonical board and a commitment is its canonical card. This is
+an additive representation of the same IDs and revisions used by Goals, Today,
+progress, approvals and item conversations; there is no duplicate board store.
+Existing records receive read-time defaults without a migration or data rewrite.
+
+Cards add `owner: user|leam` (default user), `stage: todo|in_progress|blocked`
+(default todo), `priority: low|normal|high` (default normal), nullable ISO
+`dueDate`, and `subtasks` (default empty). The existing lifecycle status remains
+`active|completed|paused`: completed and paused override stage in board displays;
+paused is distinct from blocked. A board lifecycle PATCH changes no daily log.
+Existing Today completion controls continue using the shared progress operation.
+Start/end dates describe an explicit planned window; dueDate is an independent
+explicit deadline. A missing date is never replaced with an inferred timeline.
+
+Each subtask has a UUID, title (1–200 characters), owner, status
+`todo|in_progress|blocked|completed`, notes (up to 500 characters), nullable
+startDate/endDate/dueDate, and children. The full tree permits at most 32 nodes,
+three levels and unique UUIDs. End must not precede start when both are present.
+Child completion does not complete the parent card or create a progress log.
+Assigning Leam records responsibility only; it grants no capabilities and does
+not start execution, coding, reminders or automatic follow-up.
+
+POST `/api/commitments/{id}/subtasks` accepts the card `revision`, `action`
+(`add|edit|remove`), `subtaskId`, and only the changed known child fields. Addition
+requires a title and may include an existing `parentId`; other actions cannot
+reparent. Edit preserves omitted fields and every unrelated node. Remove accepts
+only revision/action/subtaskId and removes that exact subtree. The response is the
+updated card with incremented revision. Missing identities return 404, stale
+revisions return 409, and invalid structures return 422 or a domain conflict.
+Mutation and any proposal receipt commit atomically.
+
+The same input plus card `id` is exposed as proposal operation
+`commitment.subtask`. Generic tool proposals remain manual. Trusted Today/Goals
+origins honor the existing approval settings; the browser cannot assert trusted
+origin. Approved retries return the existing receipt. User decline/supersession
+and stale review protection retain the existing proposal semantics.
+
+Today reconciliation receives bounded canonical board names and card structure.
+It resolves readable capacity names to existing IDs, asks when the target is
+ambiguous, and emits small child add/edit findings rather than replacing a tree.
+Additions receive deterministic IDs; revisions and proposal receipts remain the
+mutation authority. A pending new card must be approved before editing its
+children. Extraction uses the existing single bounded semantic check, not an
+extra routing call; provider mistakes remain possible and are not proof of user
+acceptance. No external calendar write occurs.
+
+Rollback must retain validators compatible with these additive stored fields;
+older binaries may reject edits to enriched cards. Do not strip user fields to
+make rollback pass. There is no destructive migration.

@@ -7,6 +7,7 @@ export function BackupSettings({ fail }: Props) {
   const [items, setItems] = useState<Data[]>([]);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState(false);
+  const [reused, setReused] = useState(false);
   const generation = useRef(0);
   const mounted = useRef(true);
   const load = async () => {
@@ -41,6 +42,8 @@ export function BackupSettings({ fail }: Props) {
         </strong>
       </p>
       <p>
+        One snapshot per host-local calendar day; the newest three are kept.
+        Creating again reuses today’s validated snapshot, which may predate later changes.
         Codex authentication and session files, IronClaw runtime data, source
         repositories and other host files are outside this product backup.
       </p>
@@ -52,7 +55,8 @@ export function BackupSettings({ fail }: Props) {
             setBusy(true);
             setCreated(false);
             try {
-              await api("/backups", "POST", {});
+              const result = await api("/backups", "POST", {});
+              setReused(result.reused === true);
               await load();
               setCreated(true);
             } catch (error) {
@@ -74,7 +78,7 @@ export function BackupSettings({ fail }: Props) {
       </div>
       {created && (
         <p role="status">
-          Backup saved privately on this Leam host. Download a separate copy
+          {reused ? "Today’s backup reused." : "Backup saved privately on this Leam host."} Download a separate copy
           below.
         </p>
       )}
@@ -96,7 +100,8 @@ export function BackupSettings({ fail }: Props) {
           Open the independent Recovery page from Settings to restore a local
           backup after operator activation. Review the snapshot, confirm once,
           and follow its durable receipt even while the main app is stopped.
-          A fresh safety backup and the previous data directory are retained.
+          Today’s validated safety backup and the previous data directory are retained;
+          the daily snapshot may predate changes made later today.
         </p>
         <p>
           Recovery also offers explicit rollback. Both operations pause scheduled

@@ -176,12 +176,12 @@ test("read-aloud is explicit, cancellable and continues on navigation", async ({
   ).toBe(0);
   await page.getByRole("button", { name: "Read aloud", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Stop speaking" }),
+    page.locator("#companion-message-reply").getByRole("button", { name: "Stop speaking", exact: true }),
   ).toBeVisible();
   expect(await page.evaluate(() => (window as any).voiceProbe.spoken)).toEqual([
     "A spoken reply",
   ]);
-  await page.getByRole("button", { name: "Stop speaking" }).click();
+  await page.locator("#companion-message-reply").getByRole("button", { name: "Stop speaking", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Read aloud", exact: true }),
   ).toBeVisible();

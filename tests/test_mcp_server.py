@@ -59,9 +59,16 @@ def test_mcp_protocol_exposes_only_sourced_reads_and_proposals():
         assert listed.status_code == 200, listed.text
         names = {tool["name"] for tool in listed.json()["result"]["tools"]}
         assert names == {
+            "leam_background_job",
+            "create_inbox_item",
+            "leam_inbox",
+            "leam_resources",
+            "leam_resource_save",
+            "leam_email_draft",
             "leam_context",
             "leam_system",
             "leam_today",
+            "leam_email",
             "leam_calendar_events",
             "leam_calendar_links",
             "leam_calendar_inspect",

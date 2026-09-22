@@ -67,6 +67,61 @@ class IronClaw:
         except ValueError:
             raise RuntimeError("IronClaw returned an invalid response")
 
+    async def complete(self, body, request_id):
+        """Tool-free prepared completion; never falls back to a conversational route."""
+        if (
+            body.get("stream") is not False
+            or body.get("tools") != []
+            or "tool_choice" in body
+            or body.get("response_format", {}).get("type") != "json_schema"
+        ):
+            raise RuntimeError("Unsupported isolated completion contract")
+        try:
+            token = (
+                self.token
+                if self.token is not None
+                else self.token_path.read_text().strip()
+            )
+            async with asyncio.timeout(95):
+                async with self.client.stream(
+                    "POST",
+                    "/v1/chat/completions",
+                    json=body,
+                    headers={
+                        "authorization": "Bearer " + token,
+                        "Idempotency-Key": request_id,
+                    },
+                    timeout=httpx.Timeout(90, connect=5),
+                ) as response:
+                    if not response.is_success:
+                        raise RuntimeError(
+                            "Isolated model completion unavailable",
+                            status_code=response.status_code,
+                        )
+                    data = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        data.extend(chunk)
+                        if len(data) > 131072:
+                            raise RuntimeError("Isolated completion response too large")
+                    result = json.loads(data)
+                    if any(
+                        choice.get("message", {}).get("tool_calls")
+                        for choice in result.get("choices", [])
+                    ):
+                        raise RuntimeError(
+                            "Unexpected tool output in isolated completion"
+                        )
+                    return result
+        except (
+            OSError,
+            AttributeError,
+            TypeError,
+            ValueError,
+            httpx.HTTPError,
+            TimeoutError,
+        ):
+            raise RuntimeError("Isolated model completion failed") from None
+
     async def events(self, path, cursor=None):
         """Bounded canonical browser events, using server-held runtime credentials."""
         try:

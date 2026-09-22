@@ -3,11 +3,19 @@ export type VoiceChoice = { uri: string; name: string; lang: string };
 export type VoicePreferences = {
   version: 1;
   voice: VoiceChoice | null;
+  pocketVoice: string;
   rate: number;
+  pocketRate: number;
 };
 export const voicePreferencesKey = "leam.voice.output.v1";
 export const voicePreferencesChanged = "leam:voice-preferences";
-const defaults = (): VoicePreferences => ({ version: 1, voice: null, rate: 1 });
+const defaults = (): VoicePreferences => ({
+  version: 1,
+  voice: null,
+  pocketVoice: "alba",
+  rate: 1,
+  pocketRate: 1,
+});
 let fallback = defaults();
 let memoryOnly = false;
 function normalized(value: unknown): VoicePreferences {
@@ -21,10 +29,22 @@ function normalized(value: unknown): VoicePreferences {
   const voice = input.voice;
   return {
     version: 1,
+    pocketVoice:
+      typeof input.pocketVoice === "string" &&
+      /^[a-z0-9][a-z0-9_-]{0,79}$/.test(input.pocketVoice)
+        ? input.pocketVoice
+        : "alba",
     rate:
       typeof input.rate === "number" && Number.isFinite(input.rate)
         ? Math.max(0.5, Math.min(2, input.rate))
         : 1,
+    // Preserve the former shared speed until the owner edits either profile.
+    pocketRate:
+      typeof input.pocketRate === "number" && Number.isFinite(input.pocketRate)
+        ? Math.max(0.5, Math.min(2, input.pocketRate))
+        : typeof input.rate === "number" && Number.isFinite(input.rate)
+          ? Math.max(0.5, Math.min(2, input.rate))
+          : 1,
     voice:
       voice &&
       typeof voice.uri === "string" &&

@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import time
 from collections import defaultdict, deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 
 from argon2 import PasswordHasher
@@ -21,22 +21,27 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .accounts import Accounts
 from .accounts import router as accounts_router
-from .attachments import AttachmentStore, router as attachments_router
+from .agenda import Agenda
+from .agenda import router as agenda_router
+from .agenda_priorities import router as agenda_priorities_router
+from .artifacts import PREVIEW_POLICY, Artifacts
+from .artifacts import router as artifacts_router
+from .attachments import AttachmentStore
+from .attachments import router as attachments_router
+from .background_jobs import BackgroundJobs
+from .background_jobs import router as background_jobs_router
 from .backlog import Backlog
 from .backlog import router as backlog_router
 from .backups import Backups
 from .backups import router as backups_router
-from .email import Emails
-from .email import router as email_router
 from .calendar import Calendars
-from .agenda import Agenda, router as agenda_router
 from .calendar import router as calendar_router
 from .calendar_actions import CalendarActions
 from .calendar_actions import router as calendar_actions_router
 from .calendar_changes import CalendarChanges
 from .calendar_changes import router as calendar_changes_router
 from .codex import CodexClient, CodexError, CodexGenerationError
-from .coding_catalog import include_handoffs
+from .coding_catalog import include_handoffs, purpose_metadata, visible_threads
 from .coding_handoff import CodingHandoffs
 from .coding_handoff import router as coding_handoff_router
 from .coding_models import CodingModels
@@ -45,12 +50,33 @@ from .coding_policy import CodingPolicyError, coding_context
 from .commitments import router as commitments_router
 from .companion import router as companion_router
 from .conversation_titles import DeleteCodingConversation, RenameConversation
+from .document_tools import router as document_tools_router
 from .domain_tools import DomainTools
 from .domain_tools import router as domain_tools_router
+from .email import Emails
+from .email import router as email_router
+from .email_drafts import EmailDrafts
+from .email_drafts import router as email_drafts_router
+from .inbox import Inbox
+from .inbox import router as inbox_router
+from .inbox_events import InboxEvents
+from .inbox_mail import router as inbox_mail_router
+from .email_tasks import router as email_tasks_router
+from .inbox_removal import router as inbox_removal_router
 from .ironclaw import IronClaw, RuntimeError
-from .item_chat import ItemChats, router as item_chat_router
+from .wellbeing import router as wellbeing_router
+from .item_chat import ItemChats
+from .item_chat import router as item_chat_router
+from .local_voice import LocalVoice
+from .local_voice import router as local_voice_router
+from .mail_read import MailReader
+from .mail_read import router as mail_read_router
+from .main_coding import MainCoding
+from .main_coding import router as main_coding_router
+from .maintenance import MaintenanceHeld, installed_maintenance
 from .permission_profiles import PermissionProfiles
 from .permission_profiles import router as permission_profiles_router
+from .procedures import router as procedures_router
 from .proposals import Proposals
 from .proposals import router as proposals_router
 from .push import Push
@@ -58,9 +84,12 @@ from .push import router as push_router
 from .remember import router as remember_router
 from .reminders import Scheduler
 from .reminders import router as reminders_router
+from .resource_links import ResourceLinks
+from .resource_links import router as resource_links_router
+from .restore_automation import RestoreAutomation
+from .restore_automation import router as restore_automation_router
 from .routine_events import EventInputs
 from .routine_events import router as event_inputs_router
-from .restore_automation import RestoreAutomation, router as restore_automation_router
 from .routines import Routines
 from .routines import router as routines_router
 from .shared_coding import SharedCoding
@@ -68,10 +97,16 @@ from .shared_controls import router as shared_controls_router
 from .shared_decisions import router as shared_decisions_router
 from .store import Store
 from .system_inspection import SystemInspector
+from .thread_models import router as thread_models_router
+from .ticket_auto_handoff import TOOL as TICKET_HANDOFF_TOOL
+from .ticket_auto_handoff import TicketAutoHandoff
 from .ticket_chat import TicketChats
 from .ticket_chat import router as ticket_chat_router
+from .today_reconciliation import TodayReconciliation
+from .today_reconciliation import router as reconciliation_router
 from .tool_permissions import ToolPermissions
 from .tool_permissions import router as tool_permissions_router
+from .tool_scope import RuntimeScopeGuard, configured_credential
 from .updates import Updates
 from .updates import router as updates_router
 
@@ -121,8 +156,20 @@ def create_app(
     push_transport=None,
     account_transport=None,
     shared_coding=None,
+    maintenance=None,
+    local_voice=None,
+    usage_home=None,
+    runtime_scope_credential=None,
 ):
     store = Store(directory)
+    from .usage import UsageService
+    from .usage import router as usage_router
+
+    usage = UsageService(store, usage_home)
+    maintenance = maintenance or installed_maintenance(directory)
+    store.maintenance = maintenance
+    voice = local_voice or LocalVoice()
+    inbox_events = InboxEvents(store)
     scheduler = Scheduler(store, scheduler_clock)
     routines = Routines(store, scheduler_clock)
     push = Push(store, scheduler_clock, push_transport)
@@ -145,6 +192,8 @@ def create_app(
             )
         ),
     )
+    usage.runtime = runtime
+    background_jobs = BackgroundJobs(store, runtime, accounts.vault)
     shared = shared_coding or SharedCoding(store)
     inspector = SystemInspector(
         store,
@@ -161,27 +210,47 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app):
+        inbox_worker = asyncio.create_task(inbox_events.run())
+        reconciliation_worker = asyncio.create_task(reconciliation.run())
+        usage_worker = asyncio.create_task(usage.run())
         worker = asyncio.create_task(scheduler.run())
         push_worker = asyncio.create_task(push.run())
         routine_worker = asyncio.create_task(routines.run())
+        background_worker = asyncio.create_task(background_jobs.run())
+        ticket_handoff_worker = asyncio.create_task(ticket_auto_handoff.run())
         try:
             yield
         finally:
+            inbox_worker.cancel()
+            reconciliation_worker.cancel()
+            usage_worker.cancel()
             worker.cancel()
             push_worker.cancel()
             routine_worker.cancel()
+            background_worker.cancel()
+            ticket_handoff_worker.cancel()
             await asyncio.gather(
-                worker, push_worker, routine_worker, return_exceptions=True
+                inbox_worker,
+                reconciliation_worker,
+                usage_worker,
+                worker,
+                push_worker,
+                routine_worker,
+                background_worker,
+                ticket_handoff_worker,
+                return_exceptions=True,
             )
+            await emails.classifier.close()
             results = await asyncio.gather(
                 bridge.close(),
                 runtime.close(),
                 push.close(),
                 shared.close(),
+                voice.close(),
                 return_exceptions=True,
             )
             for name, result in zip(
-                ("Codex", "IronClaw", "Push", "Shared Codex"), results
+                ("Codex", "IronClaw", "Push", "Shared Codex", "Local voice"), results
             ):
                 if isinstance(result, BaseException):
                     logging.getLogger(__name__).error(
@@ -191,7 +260,13 @@ def create_app(
     app = FastAPI(
         title="Leam", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
     )
+    app.include_router(procedures_router(store))
+    app.include_router(artifacts_router(Artifacts(store)))
+    app.include_router(resource_links_router(ResourceLinks(store)))
+    app.include_router(inbox_router(Inbox(store)))
     app.state.store = store
+    app.state.usage = usage
+    app.include_router(usage_router(usage))
     attachments = AttachmentStore(store)
     app.include_router(attachments_router(attachments))
     app.state.updates = Updates(store)
@@ -200,6 +275,13 @@ def create_app(
     app.include_router(updates_router(app.state.updates))
     ticket_chats = TicketChats(store, bridge, bindings, shared)
     app.include_router(ticket_chat_router(ticket_chats))
+    main_coding = MainCoding(store, bridge, shared, bindings, ticket_chats)
+    ticket_auto_handoff = TicketAutoHandoff(store, bridge, main_coding, ticket_chats, accounts.vault)
+    app.state.ticket_auto_handoff = ticket_auto_handoff
+    if hasattr(bridge, "dynamic_handlers"):
+        bridge.dynamic_handlers[TICKET_HANDOFF_TOOL] = ticket_auto_handoff.invoke
+    app.state.main_coding = main_coding
+    app.include_router(main_coding_router(main_coding))
     app.include_router(backlog_router(Backlog(store)))
     app.state.shared_coding = shared
     app.state.codex = bridge
@@ -208,26 +290,38 @@ def create_app(
         permission_profiles_router(PermissionProfiles(store, permissions, inspector))
     )
     app.include_router(tool_permissions_router(permissions))
-    emails = Emails(store, accounts)
+    app.include_router(document_tools_router(runtime))
+    email_drafts = EmailDrafts(store, accounts.vault)
+    emails = Emails(store, accounts, runtime)
+    app.include_router(inbox_mail_router(store, emails))
+    app.include_router(inbox_removal_router(store, emails))
+    mail_reader = MailReader(emails)
+    app.state.mail_reader = mail_reader
+    app.include_router(mail_read_router(mail_reader))
     agenda = Agenda(store, runtime, emails=emails)
     app.state.agenda = agenda
     app.include_router(
-        companion_router(store, runtime, bridge, inspector, agenda=agenda)
+        companion_router(store, runtime, bridge, inspector, agenda=agenda, jobs=background_jobs)
     )
     app.include_router(commitments_router(store))
     app.include_router(item_chat_router(ItemChats(store, runtime)))
     app.include_router(agenda_router(agenda))
+    app.include_router(agenda_priorities_router(agenda))
     app.include_router(remember_router(store))
     app.include_router(reminders_router(scheduler))
     app.state.scheduler = scheduler
     app.state.routines = routines
+    app.include_router(wellbeing_router(store, runtime))
     app.include_router(routines_router(routines))
     app.include_router(event_inputs_router(EventInputs(store, scheduler_clock)))
     app.include_router(coding_models_router(coding_models))
+    app.include_router(thread_models_router(coding_models, shared, bindings, locks))
     app.state.push = push
     app.include_router(push_router(push))
     app.state.accounts = accounts
     app.include_router(accounts_router(accounts))
+    app.state.email_drafts = email_drafts
+    app.include_router(email_drafts_router(email_drafts))
     app.state.emails = emails
     app.include_router(email_router(emails))
     calendars = Calendars(store, accounts)
@@ -235,15 +329,28 @@ def create_app(
     app.include_router(calendar_actions_router(calendar_actions))
     calendar_changes = CalendarChanges(calendar_actions)
     app.include_router(calendar_changes_router(calendar_changes))
-    proposals = Proposals(store, calendar_actions, calendar_changes)
+    proposals = Proposals(store, calendar_actions, calendar_changes, agenda=agenda)
+    reconciliation = TodayReconciliation(store, runtime, proposals)
+    proposals.on_content_deleted = reconciliation.forget_proposal_content
+    proposals.purge_declined()  # Authorized content removal; deployment backs up first.
+    agenda.reconciliation = reconciliation
+    app.state.reconciliation = reconciliation
+    app.include_router(reconciliation_router(reconciliation))
     handoffs = CodingHandoffs(store, bridge, bindings, shared, proposals)
     app.include_router(coding_handoff_router(handoffs))
     app.state.coding_handoffs = handoffs
+    handoffs.main = main_coding
     if codex is None:
         bridge.on_event = handoffs.record_event
     app.state.proposals = proposals
     app.include_router(proposals_router(proposals))
-    domain_tools = DomainTools(proposals, directory, inspector)
+    app.include_router(email_tasks_router(store, emails, proposals))
+    scope_guard = (RuntimeScopeGuard(store, runtime, runtime_scope_credential)
+                   if runtime_scope_credential is not None else None)
+    app.state.background_jobs = background_jobs
+    app.include_router(background_jobs_router(background_jobs))
+    domain_tools = DomainTools(proposals, directory, inspector, mail_reader=mail_reader,
+                               scope_guard=scope_guard, jobs=background_jobs)
     app.include_router(domain_tools_router(domain_tools))
     app.include_router(backups_router(Backups(store)))
     app.include_router(
@@ -269,17 +376,21 @@ def create_app(
             ).fetchone()
         return bool(row and row["expires"] > time.time())
 
+    app.include_router(local_voice_router(voice, session_valid))
+
     @app.middleware("http")
     async def security(request, call_next):
         if request.url.path.startswith("/api/"):
-            internal = request.url.path == "/api/internal/tools"
+            control_probe = request.url.path == "/api/internal/maintenance"
+            internal = request.url.path == "/api/internal/tools" or control_probe
             if internal:
                 if request.headers.get("origin"):
                     return JSONResponse(
                         {"detail": "Browser origins cannot use the tool credential"},
                         status_code=403,
                     )
-                if not domain_tools.authorized(
+                authority = maintenance if control_probe else domain_tools
+                if authority is None or not authority.authorized(
                     request.headers.get("authorization", "")
                 ):
                     return JSONResponse(
@@ -293,9 +404,12 @@ def create_app(
                         {"detail": "Tool ingress is loopback only"}, status_code=403
                     )
             upload = request.method == "POST" and request.url.path == "/api/attachments"
-            if upload and not session_valid(request.cookies.get("leam_session")):
+            resource_upload = request.method == "POST" and request.url.path == "/api/artifacts"
+            if (upload or resource_upload) and not session_valid(request.cookies.get("leam_session")):
                 return JSONResponse({"detail": "Sign in to Leam"}, status_code=401)
-            body_limit = 10 * 1024 * 1024 if upload else 1024 * 1024
+            # Resource JSON includes base64 overhead; only this authenticated route
+            # receives the larger envelope. The domain enforces decoded file quotas.
+            body_limit = (15 if resource_upload else 10 if upload else 1) * 1024 * 1024
             if request.method not in ["GET", "HEAD", "OPTIONS"]:
                 if not internal and request.headers.get("origin") not in origins:
                     return JSONResponse(
@@ -332,18 +446,80 @@ def create_app(
                 and not session_valid(request.cookies.get("leam_session"))
             ):
                 return JSONResponse({"detail": "Sign in to Leam"}, status_code=401)
-        response = await call_next(request)
+        admission = nullcontext()
+        if (
+            maintenance is not None
+            and request.url.path.startswith("/api/")
+            and request.url.path
+            not in {"/api/internal/maintenance", "/api/health", "/api/auth/status"}
+        ):
+            admission = maintenance.admit(
+                existing_companion=request.url.path == "/api/internal/tools"
+            )
+        try:
+            with admission:
+                response = await call_next(request)
+        except MaintenanceHeld as error:
+            response = JSONResponse(
+                {"detail": str(error), "maintenance": True, "accepted": False},
+                status_code=503,
+                headers={"Retry-After": "5"},
+            )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        # Only the exact artifact preview route may opt into its isolated frame.
+        artifact_preview = (
+            request.url.path.startswith("/api/artifacts/")
+            and request.url.path.endswith("/preview")
+            and response.headers.get("Content-Security-Policy") == PREVIEW_POLICY
         )
+        if artifact_preview:
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        # Preserve only the known download and isolated artifact policies.
+        if (
+            response.headers.get("Content-Security-Policy")
+            != "default-src 'none'; sandbox"
+            and not artifact_preview
+        ):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+            )
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         elif request.url.path in ("/", "/index.html", "/sw.js"):
             response.headers["Cache-Control"] = "no-cache"
         return response
+
+    @app.get("/api/internal/maintenance")
+    async def maintenance_probe():
+        state = maintenance.status()
+        if not state["held"]:
+            return {
+                "idle": False,
+                "reason": "Maintenance has not been requested",
+                "maintenance": state,
+            }
+        if not maintenance.drained():
+            return {
+                "idle": False,
+                "reason": "Accepted product work is still draining",
+                "maintenance": state,
+            }
+        native = await bridge.drain_status()
+        return {
+            "idle": native["idle"] and maintenance.drained(),
+            "native": native,
+            "maintenance": maintenance.status(),
+        }
+
+    @app.exception_handler(MaintenanceHeld)
+    async def maintenance_error(request, error):
+        return JSONResponse(
+            {"detail": str(error), "maintenance": True},
+            status_code=503,
+            headers={"Retry-After": "5"},
+        )
 
     @app.exception_handler(RuntimeError)
     async def runtime_error(request, error):
@@ -448,6 +624,8 @@ def create_app(
         # The IDE-owned session remains discoverable even while the independent
         # native App Server catalog is slow or unavailable. No IPC starts here.
         thread = shared.listing()
+        if thread:
+            thread = purpose_metadata(store, {"data": [thread]})["data"][0]
         return {"configured": thread is not None, "thread": thread}
 
     @app.get("/api/codex/threads")
@@ -455,16 +633,26 @@ def create_app(
         cursor: str | None = Query(default=None, max_length=4096),
         limit: int = Query(default=50, ge=1, le=100),
     ):
-        params = {"limit": limit, "sourceKinds": ["cli", "vscode", "appServer"]}
+        params = {
+            "limit": limit,
+            "sourceKinds": ["cli", "vscode", "appServer"],
+            "sortKey": "recency_at",
+            "sortDirection": "desc",
+            "archived": False,
+        }
         if cursor:
             params["cursor"] = cursor
-        result = await bridge.request("thread/list", params)
-        result = await include_handoffs(store, bridge, result, first_page=not cursor)
+        result = visible_threads(await bridge.request("thread/list", params))
+        filtered = result["leamFilteredCount"]
+        result = visible_threads(
+            await include_handoffs(store, bridge, result, first_page=not cursor)
+        )
+        result["leamFilteredCount"] += filtered
         shared_listing = shared.listing() if not cursor else None
         result["data"] = ([shared_listing] if shared_listing else []) + [
             t for t in result.get("data", []) if not shared.owns(t.get("id"))
         ]
-        return result
+        return purpose_metadata(store, result)
 
     @app.patch("/api/codex/threads/{thread_id}")
     async def rename_coding_thread(thread_id: str, body: RenameConversation):
@@ -483,9 +671,11 @@ def create_app(
         # Native delete stops running descendants. The explicit browser confirmation
         # acknowledges those semantics, but never authorizes deleting the build or
         # orphaning an update ticket's dedicated conversation.
-        async with locks[thread_id]:
+        async with main_coding.lock, locks[thread_id]:
             shared_listing = shared.listing()
             protected = {shared_listing["id"]} if shared_listing else set()
+            if main_coding.binding():
+                protected.add(main_coding.binding()["threadId"])
             with store.connect() as db:
                 rows = db.execute(
                     "SELECT value FROM settings WHERE key GLOB 'ticket-chat:*' LIMIT 101"
@@ -515,7 +705,7 @@ def create_app(
             if thread_id in protected:
                 raise HTTPException(
                     409,
-                    "Shared build and update-linked conversations are protected from deletion here.",
+                    "Main, shared build and update-linked conversations are protected from deletion here.",
                 )
             checked = set()
             try:
@@ -526,7 +716,7 @@ def create_app(
                         if ancestor == thread_id:
                             raise HTTPException(
                                 409,
-                                "This conversation contains the shared build or an update-linked conversation and cannot be deleted here.",
+                                "This conversation contains Main, the shared build or an update-linked conversation and cannot be deleted here.",
                             )
                         if ancestor in visited:
                             raise HTTPException(
@@ -564,11 +754,22 @@ def create_app(
                             409,
                             "Conversation ancestry is too deep to verify safely. Manage deletion in Codex.",
                         )
-                await bridge.request("thread/delete", {"threadId": thread_id})
             except CodexError as error:
                 raise HTTPException(
+                    409,
+                    "A protected conversation's history could not be verified. No deletion was requested. Refresh the shared session or its Updates ticket before retrying.",
+                ) from error
+            try:
+                await bridge.request("thread/delete", {"threadId": thread_id})
+            except CodexError as error:
+                if error.rpc_code == -32601:
+                    raise HTTPException(
+                        501,
+                        "The installed Codex does not support permanent conversation deletion. Nothing was deleted.",
+                    ) from error
+                raise HTTPException(
                     502,
-                    "Codex could not verify or delete this conversation. Refresh before retrying.",
+                    "Codex did not confirm deletion. Its outcome may be uncertain; refresh before retrying.",
                 ) from error
             bindings.pop(thread_id, None)
             return {"id": thread_id, "deleted": True}
@@ -726,7 +927,11 @@ def create_app(
                     422, "Shared Coding uses its owner-bound submission path"
                 )
             return await shared.send(
-                body.text, body.requestId, body.generation, body.attachmentIds
+                body.text,
+                body.requestId,
+                body.generation,
+                body.attachmentIds,
+                coordination_context=main_coding.context(thread_id),
             )
         try:
             refs = attachments.resolve(body.attachmentIds)
@@ -752,6 +957,7 @@ def create_app(
             try:
                 policy_context = await asyncio.to_thread(coding_context)
                 policy_context.update(ticket_chats.context(thread_id))
+                policy_context.update(main_coding.context(thread_id))
                 policy_context.update(handoffs.context(thread_id))
                 extra_input, extra_context = await attachments.coding(
                     body.attachmentIds
@@ -769,12 +975,13 @@ def create_app(
                     409, "Codex restarted. Reconnect this thread before sending."
                 )
             try:
-                attachments.bind(body.attachmentIds, body.requestId)
+                attachments.bind(body.attachmentIds, body.requestId, thread_id=thread_id, surface="coding")
                 existing = store.reserve(body.requestId, fingerprint)
             except ValueError as error:
                 raise HTTPException(409, str(error)) from error
             if existing is not None:
                 return existing
+            policy_context.update(ticket_auto_handoff.admit(thread_id, body, fingerprint))
             params = {
                 "threadId": thread_id,
                 "clientUserMessageId": body.requestId,
@@ -842,6 +1049,7 @@ def create_app(
                     submitted=packet["id"] in getattr(bridge, "responding", set()),
                 )
                 for packet in getattr(bridge, "requests", {}).values()
+                if not packet.get("_internal")
             ]
             + shared.pending_requests()
         }
@@ -907,6 +1115,24 @@ def create_app(
     async def dispatch_handoff(thread, text, request_id):
         return await send_turn(thread, Turn(text=text, requestId=request_id))
 
+    async def dispatch_main(thread, text, request_id, generation, expected_turn):
+        return await send_turn(
+            thread,
+            Turn(
+                text=text,
+                requestId=request_id,
+                generation=generation,
+                expectedTurnId=expected_turn,
+            ),
+        )
+
+    async def reconcile_main(thread, request_id, text, expected_turn):
+        return await reconcile(
+            thread, request_id, Reconcile(text=text, expectedTurnId=expected_turn)
+        )
+
+    main_coding.reconcile = reconcile_main
+    main_coding.dispatch = dispatch_main
     handoffs.dispatch = dispatch_handoff
     web = Path(__file__).resolve().parents[1] / "apps/web/dist"
     if web.exists():
@@ -923,4 +1149,9 @@ def application():
             "LEAM_ORIGINS", "http://127.0.0.1:46400,http://localhost:46400"
         ).split(",")
     )
-    return create_app(directory, origins)
+    return create_app(
+        directory,
+        origins,
+        usage_home=Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))),
+        runtime_scope_credential=configured_credential(directory),
+    )

@@ -193,6 +193,8 @@ class Store:
                 "UPDATE requests SET state=?,result=? WHERE id=?",
                 ("complete", json.dumps(result), request_id),
             )
+            from .attachment_resources import accepted
+            accepted(db, request_id, result, surface="coding")
 
     def entities(self, kind):
         with self.connect() as db:
@@ -273,6 +275,8 @@ class Store:
                 "UPDATE runtime_actions SET result=? WHERE id=?",
                 (json.dumps(result), action_id),
             )
+            from .attachment_resources import accepted
+            accepted(db, action_id, result, surface="companion")
 
     def existing_runtime_action(self, action_id, fingerprint):
         with self.connect() as db:

@@ -16,6 +16,7 @@ from pydantic import Field, field_validator
 from .accounts import GMAIL_READONLY
 from .calendar_visibility import CalendarVisibility, VisibilityChange, calendar_key
 from .commitments import Commitments, Input
+from .completion_evidence import accomplishments
 from .conversation_titles import ConversationTitles
 
 REFERENCE_BYTES = 2048
@@ -183,8 +184,11 @@ class Agenda:
                 "syncedAt": mail_accounts[item["accountId"]]["syncedAt"],
                 "sourceState": mail_accounts[item["accountId"]]["state"],
             }
-            for item in mailbox["items"][:20]
+            for item in mailbox["items"]
+            if item.get("actionability", {}).get("state") == "action"
         ]
+        actions_truncated = len(emails) > 20
+        emails = emails[:20]
         email_source = {
             key: value
             for key, value in mailbox.items()
@@ -194,9 +198,7 @@ class Agenda:
             {key: value for key, value in item.items() if key != "items"}
             for item in mailbox["accounts"]
         ]
-        email_source["truncated"] = bool(
-            mailbox.get("truncated") or len(mailbox["items"]) > 20
-        )
+        email_source["truncated"] = bool(mailbox.get("truncated")) or actions_truncated
         if mailbox["state"] == "not_connected":
             email_source["reason"] = "mail_consent_not_granted"
         for item in [*commitments, *events, *emails]:
@@ -231,6 +233,7 @@ class Agenda:
             **selection.identity(),
             "window": {"start": start.isoformat(), "end": end.isoformat()},
             "observedAt": now,
+            "accomplishments": accomplishments(self.store, selection),
             "hiddenEventCount": hidden_event_count,
             "sources": {
                 "calendar": {
@@ -252,7 +255,7 @@ class Agenda:
             "nextOffset": next_offset if next_offset < len(combined) else None,
         }
 
-    def triage(self, body):
+    def triage_item(self, body):
         selection = Selection(date=body.date, timezone=body.timezone)
         # Full eligible source identities, independent of the UI's current page.
         snapshot = self.snapshot(selection, limit=2**31)
@@ -268,6 +271,13 @@ class Agenda:
         )
         if item is None:
             raise HTTPException(404, "This source is no longer in the selected day")
+        if item["triage"]["revision"] != body.revision:
+            raise HTTPException(409, "Daily choice changed; refresh before editing")
+        return item
+
+    def triage(self, body, *, record=None):
+        selection = Selection(date=body.date, timezone=body.timezone)
+        item = self.triage_item(body)
         key = "agenda-triage:" + selection.scope_key()
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -327,7 +337,78 @@ class Agenda:
                 "INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, json.dumps(saved)),
             )
-        return {"key": body.key, **result}
+            receipt = {"key": body.key, **result}
+            if record is not None:
+                record(db, receipt)
+        return receipt
+
+    @staticmethod
+    def context_item(item):
+        """Exact action identities without notes, mail snippets, bodies or addresses."""
+        fields = (
+            "key",
+            "id",
+            "revision",
+            "triage",
+            "date",
+            "log",
+            "status",
+            "start",
+            "end",
+            "allDay",
+            "calendarId",
+            "eventId",
+            "syncedAt",
+            "accountId",
+            "threadId",
+            "receivedAt",
+            "sourceState",
+        )
+        return {
+            **{key: item[key] for key in fields if key in item},
+            "title": item.get("title", item.get("subject", "")),
+            "sourceKind": "event"
+            if "calendarId" in item
+            else "email"
+            if "accountId" in item
+            else "commitment",
+        }
+
+    def context_page(self, selection, *, offset=0, limit=20, focus_only=False):
+        snapshot = self.snapshot(selection, limit=2**31)
+        items = snapshot["commitments"] + snapshot["events"] + snapshot["emails"]
+        focused = [item for item in items if item["triage"]["disposition"] == "focus"]
+        items = (
+            focused
+            if focus_only
+            else sorted(
+                items, key=lambda item: item["triage"]["disposition"] != "focus"
+            )
+        )
+        return {
+            **selection.identity(),
+            "view": "agenda",
+            "source": "leam:agenda",
+            "observedAt": snapshot["observedAt"],
+            "window": snapshot["window"],
+            "referenceData": True,
+            "untrustedSourceData": True,
+            "focusOnly": focus_only,
+            "focusCount": len(focused),
+            "total": len(items),
+            "hiddenEventCount": snapshot["hiddenEventCount"],
+            "sourceState": {
+                "calendar": snapshot["sources"]["calendar"]["state"],
+                "email": snapshot["sources"]["email"]["state"],
+                "emailTruncated": snapshot["sources"]["email"]["truncated"],
+            },
+            "items": [
+                self.context_item(item) for item in items[offset : offset + limit]
+            ],
+            "nextOffset": offset + limit if offset + limit < len(items) else None,
+            "partial": offset > 0 or offset + limit < len(items),
+            "mutation": "agenda.triage via leam_propose; pending is not applied",
+        }
 
     def chat(self, selection, *, reserve=False):
         key = "agenda-chat:" + selection.scope_key()
@@ -440,6 +521,10 @@ class Agenda:
             source="leam:agenda",
             calendarState=snapshot["sources"]["calendar"]["state"],
             emailState=snapshot["sources"]["email"]["state"],
+            emailClassification={
+                k: snapshot["sources"]["email"].get("classification", {}).get(k)
+                for k in ("state", "counts")
+            },
             emailTruncated=snapshot["sources"]["email"]["truncated"],
             emailFreshness={
                 "states": state_counts,
@@ -452,6 +537,19 @@ class Agenda:
         # Summaries are only working context; complete records remain in the UI.
         records = snapshot["commitments"] + snapshot["events"] + snapshot["emails"]
         records.sort(key=lambda x: x["triage"]["disposition"] != "focus")
+        result["focusCount"] = sum(
+            item["triage"]["disposition"] == "focus" for item in records
+        )
+        result["readMore"] = {
+            "tool": "leam_today",
+            "arguments": {
+                "view": "agenda",
+                **binding,
+                "focusOnly": True,
+                "offset": 0,
+            },
+        }
+        result["triageOperation"] = "agenda.triage"
         for item in records:
             entry = {
                 k: item[k]
@@ -478,6 +576,19 @@ class Agenda:
                 )
                 if k in item
             }
+            if "actionability" in item:
+                decision = item["actionability"]
+                entry["actionability"] = {
+                    "kind": decision["kind"],
+                    "basis": decision["basis"],
+                    "action": decision["action"][:120],
+                    "reason": decision["reason"][:120],
+                    **(
+                        {"reviewedBy": "user"}
+                        if decision.get("reviewedBy") == "user"
+                        else {}
+                    ),
+                }
             entry["title"] = item.get("title", item.get("subject", ""))
             if len(entry["title"]) > 160:
                 entry["titlePartial"] = True

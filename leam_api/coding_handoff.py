@@ -1,4 +1,4 @@
-"""Reviewed Companion tasks enter dedicated Codex sessions, never the shared owner."""
+"""Reviewed Companion tasks enter selected Main, or a dedicated session if unset."""
 
 import asyncio
 import hashlib
@@ -21,6 +21,13 @@ PREFIX = "coding-handoff:"
 
 
 class CodingTask(Input):
+    """Prepare an editable coding prompt; no dispatch occurs on proposal creation.
+
+    Review in More > Approvals. The user confirms Send to main for the reviewed
+    selected Main, or Start in Coding for a dedicated session only if Main is
+    unset. Target changes require fresh review; acceptance is not task completion.
+    """
+
     title: str = Field(min_length=1, max_length=200)
     instructions: str = Field(min_length=1, max_length=100000)
     context: str = Field(default="", max_length=12000)
@@ -61,6 +68,7 @@ def snapshot(db, saved):
             "updated",
             "submissionId",
             "workspace",
+            "main",
             "model",
             "reasoningEffort",
         )
@@ -121,6 +129,7 @@ class CodingHandoffs:
         )
         self.models = CodingModels(store, bridge)
         self.dispatch = None
+        self.main = None
 
     def proposal(self, key):
         item = self.proposals.get(key)
@@ -177,6 +186,11 @@ class CodingHandoffs:
             "submissionId": str(uuid5(NAMESPACE_URL, "leam:coding-handoff:" + key)),
             "updated": time.time(),
         }
+        saved["main"] = self.main.binding() if self.main else None
+        if saved["main"] and len(body.text) > 8000:
+            raise HTTPException(422, "Shorten the Main task to 8000 characters")
+        if saved["main"]:
+            saved["submissionId"] = str(uuid5(NAMESPACE_URL, "leam:main-coding:" + key))
         saved["previewToken"] = digest(saved)
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -186,8 +200,10 @@ class CodingHandoffs:
             existing = db.execute(
                 "SELECT value FROM settings WHERE key=?", (PREFIX + key,)
             ).fetchone()
-            if proposal["state"] != "pending" or (
-                existing and json.loads(existing["value"])["state"] != "reviewed"
+            if (
+                proposal is None
+                or proposal["state"] != "pending"
+                or (existing and json.loads(existing["value"])["state"] != "reviewed")
             ):
                 raise HTTPException(
                     409,
@@ -205,6 +221,7 @@ class CodingHandoffs:
         if not saved or body.previewToken != saved.get("previewToken"):
             raise HTTPException(409, "Review the current exact task before starting")
         if saved["state"] == "accepted":
+            self.proposals.mark_completed_read(key)
             return self.status(key)
         if saved["state"] != "reviewed":
             raise HTTPException(
@@ -226,16 +243,23 @@ class CodingHandoffs:
             raise HTTPException(
                 409, "Workspace, model or protocol changed; review again"
             )
+        current_main = self.main.binding() if self.main else None
+        if current_main != saved.get("main"):
+            raise HTTPException(409, "Main selection changed; review the task again")
+        if current_main:
+            return await self.start_main(key, saved, body)
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            current = json.loads(
-                db.execute(
-                    "SELECT value FROM settings WHERE key=?", (PREFIX + key,)
-                ).fetchone()["value"]
-            )
-            state = db.execute(
+            current_row = db.execute(
+                "SELECT value FROM settings WHERE key=?", (PREFIX + key,)
+            ).fetchone()
+            proposal_row = db.execute(
                 "SELECT state FROM proposals WHERE id=?", (key,)
-            ).fetchone()["state"]
+            ).fetchone()
+            if current_row is None or proposal_row is None:
+                raise HTTPException(409, "Handoff was removed; refresh Approvals")
+            current = json.loads(current_row["value"])
+            state = proposal_row["state"]
             if (
                 current["state"] != "reviewed"
                 or current["previewToken"] != body.previewToken
@@ -303,6 +327,7 @@ class CodingHandoffs:
                         "submissionId": saved["submissionId"],
                         "dispatchAccepted": True,
                     },
+                    mark_read=True,
                 )
         except (Exception, asyncio.CancelledError) as error:
             saved.update(state="uncertain", updated=time.time())
@@ -322,6 +347,77 @@ class CodingHandoffs:
                 )
             if isinstance(error, asyncio.CancelledError):
                 raise
+        return self.status(key)
+
+    async def start_main(self, key, saved, body):
+        """The reviewed Companion action shares Main's exact target and receipt."""
+        from .main_coding import MainTask
+
+        task = MainTask(
+            requestId=key,
+            mainRevision=saved["main"]["revision"],
+            mainThreadId=saved["main"]["threadId"],
+            sourceThreadId=saved["sourceThreadId"],
+            text=saved["text"],
+            context=saved["context"][:2000],
+        )
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current_row = db.execute(
+                "SELECT value FROM settings WHERE key=?", (PREFIX + key,)
+            ).fetchone()
+            proposal_row = db.execute(
+                "SELECT state FROM proposals WHERE id=?", (key,)
+            ).fetchone()
+            if current_row is None or proposal_row is None:
+                raise HTTPException(409, "Handoff was removed; refresh Approvals")
+            current = json.loads(current_row["value"])
+            state = proposal_row["state"]
+            if (
+                current["state"] != "reviewed"
+                or current["previewToken"] != body.previewToken
+                or state != "pending"
+            ):
+                raise HTTPException(409, "Handoff changed or already started; refresh")
+            saved.update(
+                state="sending", threadId=saved["main"]["threadId"], updated=time.time()
+            )
+            db.execute(
+                "UPDATE settings SET value=? WHERE key=?",
+                (json.dumps(saved), PREFIX + key),
+            )
+            db.execute(
+                "UPDATE proposals SET state='executing',updated=? WHERE id=?",
+                (time.time(), key),
+            )
+        try:
+            result = await self.main.send(task, companion=True)
+            saved.update(
+                state="accepted" if result["state"] == "accepted" else "uncertain",
+                updated=time.time(),
+            )
+            saved["turnId"] = (result.get("receipt") or {}).get("turn", {}).get("id")
+            with self.store.connect() as db:
+                db.execute(
+                    "UPDATE settings SET value=? WHERE key=?",
+                    (json.dumps(saved), PREFIX + key),
+                )
+                if saved["state"] == "accepted":
+                    self.proposals.record(
+                        db,
+                        key,
+                        {
+                            "handoffId": key,
+                            "threadId": saved["threadId"],
+                            "submissionId": saved["submissionId"],
+                            "dispatchAccepted": True,
+                        },
+                        mark_read=True,
+                    )
+        except (Exception, asyncio.CancelledError):
+            saved.update(state="uncertain", updated=time.time())
+            self.store.set(PREFIX + key, saved)
+            raise
         return self.status(key)
 
     def record_event(self, topic, payload):

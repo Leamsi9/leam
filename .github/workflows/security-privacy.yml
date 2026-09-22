@@ -1,0 +1,23 @@
+name: Source security and privacy
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: security-privacy-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out public source without retaining credentials
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3; verified against official actions/checkout tag
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check source and reachable history
+        run: python3 scripts/check-public-source.py --history

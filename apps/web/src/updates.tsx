@@ -1,6 +1,7 @@
+import { FeatureCard, FeatureCardContext } from "./feature-card";
 import { useEffect, useState } from "react";
+import { SemanticBadge } from "./semantic-badge";
 import { api, type Data } from "./api";
-import { TicketChat } from "./ticket-chat";
 
 type Props = { fail: (error: unknown) => void };
 const changed = () => window.dispatchEvent(new Event("leam-updates-changed"));
@@ -42,7 +43,7 @@ export function UpdatesBadge() {
         width: 9,
         height: 9,
         borderRadius: "50%",
-        background: "#f59e0b",
+        background: "var(--semantic-warning-solid)",
         marginInlineStart: 6,
       }}
     />
@@ -62,21 +63,41 @@ function ReviewCard({
 }) {
   const [details, setDetails] = useState(item.uat.details || "");
   return (
-    <article
-      className="card"
+    <FeatureCard
+      feature={item.feature}
       aria-label={item.title}
       data-unread={item.unread ? "true" : "false"}
-      style={item.unread ? { border: "2px solid #f59e0b" } : undefined}
+      style={item.unread ? { border: "2px solid var(--semantic-warning-solid)" } : undefined}
     >
       <h3>{item.title}</h3>
+      {item.activeWork && (
+        <details className="recorded-work">
+          <summary>
+            Recorded work:{" "}
+            {(
+              {
+                in_progress: "In progress",
+                blocked: "Blocked",
+                handover: "Ready to deploy",
+              } as Record<string, string>
+            )[item.activeWork.deliveryState] ||
+              item.activeWork.deliveryState}{" "}
+            · {item.activeWork.worker}
+          </summary>
+          <p>{item.activeWork.currentStep}</p>
+          <small>
+            Recorded assignment; live worker activity is not monitored here.
+          </small>
+        </details>
+      )}
       {item.unread && (
         <div className="actions">
-          <strong aria-label="Unread update" style={{ color: "#f59e0b" }}>
+          <strong
+            aria-label="Unread update"
+            style={{ color: "var(--text-warning)" }}
+          >
             Unread
           </strong>
-          <button className="secondary" disabled={busy} onClick={markRead}>
-            Mark as read
-          </button>
         </div>
       )}
       <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
@@ -98,23 +119,23 @@ function ReviewCard({
             aria-current={
               !item.superseded && item.stage === stage ? "step" : undefined
             }
-            style={{
-              padding: "6px 10px",
-              borderRadius: 6,
-              border: "1px solid currentColor",
-              fontWeight: item.stage === stage ? 700 : 400,
-              background:
-                !item.superseded && item.stage === stage
-                  ? stage === "Fail" ||
-                    (stage === "QA" && item.qa.state === "failed")
-                    ? "#7f1d1d"
-                    : "#1e3a5f"
-                  : "transparent",
-              color:
-                !item.superseded && item.stage === stage ? "white" : "inherit",
-            }}
           >
-            {stage}
+            <SemanticBadge
+              value={
+                item.superseded || item.stage !== stage
+                  ? "unknown"
+                  : stage === "Fail" ||
+                      (stage === "QA" && item.qa.state === "failed")
+                    ? "failed"
+                    : stage === "Complete"
+                      ? "complete"
+                      : stage === "UAT"
+                        ? "pending"
+                        : "deployed"
+              }
+            >
+              {stage}
+            </SemanticBadge>
           </li>
         ))}
       </ol>
@@ -138,6 +159,7 @@ function ReviewCard({
           Please share failure details here, in Coding, or in the ongoing chat.
         </p>
       )}
+
       <small>Deployed {new Date(item.deployedAt).toLocaleString()}</small>
       <details>
         <summary>Deployment identity</summary>
@@ -147,7 +169,7 @@ function ReviewCard({
       </details>
       <details open={item.qa.state === "failed"}>
         <summary>QA: {item.qa.state}</summary>
-        <strong>QA: {item.qa.state}</strong>
+        <SemanticBadge value={item.qa.state}>QA: {item.qa.state}</SemanticBadge>
         {item.qa.details && (
           <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
             {item.qa.details}
@@ -160,7 +182,9 @@ function ReviewCard({
         )}
       </details>
       <div>
-        <strong>Your UAT: {item.uat.state}</strong>
+        <SemanticBadge value={item.uat.state}>
+          Your UAT: {item.uat.state}
+        </SemanticBadge>
         {item.uat.details && (
           <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
             {item.uat.details}
@@ -211,8 +235,15 @@ function ReviewCard({
           </>
         )}
       </div>
-      <TicketChat ticket={item} />
-    </article>
+      <FeatureCardContext item={item} />
+      {item.unread && (
+        <footer className="actions">
+          <button className="secondary" disabled={busy} onClick={markRead}>
+            Mark as read
+          </button>
+        </footer>
+      )}
+    </FeatureCard>
   );
 }
 
@@ -224,7 +255,25 @@ export function UpdatesPanel({ fail }: Props) {
   const [busy, setBusy] = useState(false);
   async function load() {
     const result = await api("/updates");
-    setItems(result.items);
+    const params = new URLSearchParams(location.search);
+    const targetFeature = params.get("feature");
+    const targetUpdate = params.get("update");
+    let rows = result.items;
+    if (
+      targetFeature &&
+      targetUpdate &&
+      !rows.some((item: Data) => item.feature === targetFeature)
+    ) {
+      try {
+        const selected = await api(
+          `/updates/${encodeURIComponent(targetUpdate)}`,
+        );
+        if (selected.feature === targetFeature) rows = [...rows, selected];
+      } catch (error) {
+        fail(error);
+      }
+    }
+    setItems(rows);
     setSequence(result.sequence);
     setUnread(result.unreadCount);
     setCursor(result.nextCursor);

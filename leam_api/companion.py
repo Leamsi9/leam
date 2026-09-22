@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import time
 from collections import defaultdict
 from contextlib import aclosing
@@ -10,11 +11,11 @@ from urllib.parse import quote, urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
-from .attachments import AttachmentStore, descriptor
 from .agenda import Agenda
+from .attachments import AttachmentStore, descriptor
 from .companion_context import (
     build_model_context,
     legacy_user_offset,
@@ -27,7 +28,10 @@ from .conversation_titles import (
 )
 from .ironclaw import RuntimeError
 from .item_chat import item_context
+from .wellbeing import wellbeing_context
 from .memory_projection import grounding
+from .procedures import Choice, Procedures
+from .runtime_approvals import router as runtime_approvals_router
 from .system_inspection import Section, SystemInspector
 
 
@@ -51,6 +55,7 @@ class Selection(Input):
 
 
 class Message(Input):
+    procedure: Choice | None = None
     text: str = Field(default="", max_length=100000)
     attachmentIds: list[str] = Field(default_factory=list, max_length=10)
     requestId: str = Field(min_length=8, max_length=100)
@@ -80,9 +85,10 @@ class MemoryEdit(Memory):
     revision: int = Field(ge=1)
 
 
-def router(store, runtime, codex, inspector=None, *, agenda=None):
+def router(store, runtime, codex, inspector=None, *, agenda=None, jobs=None):
     routes = APIRouter(prefix="/api")
     locks = defaultdict(asyncio.Lock)
+    routes.include_router(runtime_approvals_router(store, runtime, locks))
     titles = ConversationTitles(store)
     attachments = AttachmentStore(store)
     agenda = agenda or Agenda(store, runtime)
@@ -216,6 +222,9 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
         result = await runtime.request(
             "GET", "/threads" + ("?" + urlencode(query) if query else "")
         )
+        if jobs is not None:
+            workers = jobs.worker_threads()
+            result["threads"] = [item for item in result.get("threads", []) if item.get("thread_id") not in workers]
         items = result.get("threads", [])
         repair = [
             item
@@ -269,6 +278,8 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
     async def delete_thread(thread_id: str, body: DeleteConversation):
         if not body.confirmed:
             raise HTTPException(422, "Confirm deletion before removing a conversation")
+        if jobs is not None and any(item["state"] not in {"completed", "failed", "cancelled"} for item in jobs.list(thread_id)["items"]):
+            raise HTTPException(409, "Finish or cancel this conversation's background jobs before deleting it")
         async with locks[thread_id]:
             try:
                 result = await runtime.request(
@@ -359,6 +370,7 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
             raise HTTPException(422, "Invalid event cursor")
 
         async def frames():
+            completed_runs = set()
             token = request.cookies.get("leam_session", "")
             token_hash = hashlib.sha256(token.encode()).hexdigest()
             async with aclosing(
@@ -379,6 +391,40 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
                         or await request.is_disconnected()
                     ):
                         return
+                    reconciliation = getattr(agenda, "reconciliation", None)
+                    if reconciliation is not None:
+                        # Projection updates include older runs. Wake only for a new
+                        # terminal run, never for every delta or SSE keepalive.
+                        try:
+                            payload = json.loads(
+                                "\n".join(
+                                    line[5:].lstrip()
+                                    for line in frame.decode().splitlines()
+                                    if line.startswith("data:")
+                                )
+                            )
+                            state = payload.get("state") or {}
+                            ended = set()
+                            if state.get("thread_id") == thread_id:
+                                for item in state.get("items", [])[:512]:
+                                    status = item.get("run_status") or {}
+                                    text = item.get("text") or {}
+                                    if status.get("status", "").lower() in {
+                                        "completed",
+                                        "failed",
+                                        "cancelled",
+                                        "canceled",
+                                        "interrupted",
+                                    }:
+                                        ended.add(status.get("run_id"))
+                                    if text.get("finalized"):
+                                        ended.add(text.get("run_id"))
+                            ended = {run for run in ended if isinstance(run, str)}
+                            if ended - completed_runs:
+                                reconciliation.notify(thread_id)
+                                completed_runs.update(ended)
+                        except (ValueError, TypeError, AttributeError):
+                            pass  # Periodic durable scans remain the recovery path.
                     yield frame
 
         return StreamingResponse(
@@ -495,6 +541,31 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
     @routes.post("/companion/threads/{thread_id}/messages")
     async def send(thread_id: str, body: Message):
         try:
+            return await send_message(thread_id, body)
+        except (RuntimeError, HTTPException) as error:
+            # A rejected preflight has never reached durable dispatch. Once a
+            # reservation exists, keep uncertainty even for upstream HTTP errors.
+            with store.connect() as db:
+                reserved = (
+                    db.execute(
+                        "SELECT 1 FROM runtime_actions WHERE id=?", (body.requestId,)
+                    ).fetchone()
+                    is not None
+                )
+            status = error.status_code if isinstance(error, HTTPException) else 502
+            detail = error.detail if isinstance(error, HTTPException) else str(error)
+            logging.getLogger(__name__).warning(
+                "Companion submission failed: reserved=%s upstream_status=%s",
+                reserved,
+                getattr(error, "status_code", None),
+            )
+            headers = dict(getattr(error, "headers", None) or {})
+            if not reserved:
+                headers["X-Leam-Action-Reserved"] = "no"
+            return JSONResponse({"detail": detail}, status_code=status, headers=headers)
+
+    async def send_message(thread_id: str, body: Message):
+        try:
             files = attachments.resolve(body.attachmentIds)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
@@ -502,8 +573,13 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
         identity = [thread_id, body.text]
         if files:
             identity.append([[item["id"], item["sha256"]] for item in files])
+        if body.procedure is not None:
+            identity.append({"procedure": body.procedure.model_dump()})
         fingerprint = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
         async with locks[thread_id]:
+            reconciliation = getattr(agenda, "reconciliation", None)
+            if reconciliation is not None:
+                await reconciliation.watch(thread_id)
             try:
                 previous = store.existing_runtime_action(body.requestId, fingerprint)
             except ValueError as error:
@@ -515,10 +591,16 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
                     "POST", previous["path"], previous["body"]
                 )
                 store.finish_runtime_action(body.requestId, result)
+                if reconciliation is not None:
+                    reconciliation.notify(thread_id)
                 return result
             session, system = await asyncio.gather(
                 runtime.request("GET", "/session"), system_snapshot()
             )
+            if reconciliation is not None and store.get(
+                "companion-agenda:" + thread_id
+            ):
+                await reconciliation.owner(session)
             with store.connect() as db:
                 memories = [
                     {
@@ -543,12 +625,19 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
                     for c in commitments
                 ],
             }
+            wellbeing = wellbeing_context(store, thread_id)
+            if wellbeing:
+                context["wellbeing"] = wellbeing
             linked_item = item_context(store, thread_id)
             if linked_item:
                 context["linkedItem"] = linked_item
             daily_agenda = agenda.reference(thread_id)
             if daily_agenda:
                 context["dailyAgenda"] = daily_agenda
+            if body.procedure is not None:
+                context["selectedProcedure"] = Procedures(store).selected(
+                    body.procedure, daily_agenda
+                )
             # Grounding is explicitly scoped as data. Codex messages never use this envelope.
             model_context = build_model_context(store, thread_id, context)
             path = (
@@ -566,7 +655,7 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
                 if files:
                     # Retain before dispatch, including uncertain outcomes. Bound IDs
                     # cannot disappear while the durable request is being written.
-                    attachments.bind(body.attachmentIds, body.requestId)
+                    attachments.bind(body.attachmentIds, body.requestId, thread_id=thread_id, surface="companion")
                     payload["attachments"] = attachments.inline_parts(
                         body.attachmentIds
                     )
@@ -579,6 +668,8 @@ def router(store, runtime, codex, inspector=None, *, agenda=None):
                 return action["result"]
             result = await runtime.request("POST", action["path"], action["body"])
             store.finish_runtime_action(body.requestId, result)
+            if reconciliation is not None:
+                reconciliation.notify(thread_id)
             return result
 
     @routes.get("/memory")

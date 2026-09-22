@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { navigate, chooseConversation } from "./navigation";
 const run = "19e9c46c-a47b-4e01-8cb4-f4c5c4c26c63";
-async function setup(page: Page, module: "companion" | "coding" = "companion") {
+async function setup(page: Page, module: "companion" | "coding" = "companion", width = 390) {
   await page.addInitScript(() => {
     const w = window as any;
     w.probe = { starts: 0, spoken: [], audio: false, pauses: 0 };
@@ -49,13 +49,15 @@ async function setup(page: Page, module: "companion" | "coding" = "companion") {
       }
       start() {
         w.probe.starts++;
+        w.probe.captureActive = true;
         w.probe.echo ||= w.probe.audio;
         this.onstart?.();
       }
       stop() {
+        w.probe.captureActive = false;
         this.onend?.();
       }
-      abort() {}
+      abort() { w.probe.captureActive = false; }
     };
     w.transcript = (text: string) =>
       w.capture.onresult?.({
@@ -76,6 +78,7 @@ async function setup(page: Page, module: "companion" | "coding" = "companion") {
         },
         resume: () => {},
         speak: (u: any) => {
+          w.probe.micDuringOutput ||= !!w.probe.captureActive;
           w.utterance = u;
           w.probe.audio = true;
           w.probe.spoken.push(u.text);
@@ -104,7 +107,7 @@ async function setup(page: Page, module: "companion" | "coding" = "companion") {
     };
     if (path === "/api/auth/status") body = { authenticated: true };
     if (path === "/api/companion/threads")
-      body = { threads: [{ thread_id: "a", title: "A" }] };
+      body = { threads: [{ thread_id: "a", title: "A" }, { thread_id: "b", title: "B" }] };
     if (path === "/api/companion/threads/a") body = { messages };
     if (path === "/api/companion/threads/a/messages") {
       writes.push(route.request().postDataJSON());
@@ -125,7 +128,7 @@ async function setup(page: Page, module: "companion" | "coding" = "companion") {
       body = { state: "notSubmitted" };
     await route.fulfill({ json: body });
   });
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width, height: 844 });
   await page.goto("/");
   if (module === "companion") await navigate(page, "Companion");
   await chooseConversation(page, "a", module);
@@ -192,6 +195,133 @@ async function codex(page: Page, method: string, params: any, id: number) {
 }
 const spoken = (page: Page) =>
   page.evaluate(() => (window as any).probe.spoken as string[]);
+
+for (const width of [390, 1440]) test(`popup Speak interrupts its conversation, ignores late audio and retains the silence timeout at ${width}px`, async ({ page }) => {
+  const fixture = await setup(page, "companion", width);
+  await say(page);
+  await companion(page, "A complete reply.", "completed", true);
+  await expect.poll(() => spoken(page)).toHaveLength(1);
+  const panel = page.getByRole("complementary", { name: "Speech playback" });
+  const speak = panel.getByRole("button", { name: "Speak", exact: true });
+  const box = await panel.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+  const buttonBox = await speak.boundingBox();
+  expect(buttonBox!.width).toBeGreaterThanOrEqual(44);
+  expect(buttonBox!.height).toBeGreaterThanOrEqual(44);
+  await speak.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  await page.evaluate(() => (window as any).finishAudio());
+  expect(await page.evaluate(() => (window as any).probe.echo)).toBeFalsy();
+  await page.clock.fastForward(10100);
+  await expect(page.getByText("Conversation ended after 10 seconds without speech.")).toBeVisible();
+  expect(fixture.writes).toHaveLength(1);
+});
+
+test("popup returns to its original chat with microphone off before explicit Speak", async ({ page }) => {
+  const fixture = await setup(page);
+  await say(page);
+  fixture.setMessages([{ message_id: "reply", kind: "assistant", content: "A complete reply.", turn_run_id: run, status: "finalized" }]);
+  await companion(page, "A complete reply.", "completed", true);
+  await expect.poll(() => spoken(page)).toHaveLength(1);
+  await chooseConversation(page, "b", "companion");
+  const panel = page.getByRole("complementary", { name: "Speech playback" });
+  await expect(panel.getByRole("button", { name: "Speak", exact: true })).toHaveCount(0);
+  await panel.getByRole("button", { name: "Return to chat to speak" }).click();
+  const speak = panel.getByRole("button", { name: "Speak", exact: true });
+  await expect(speak).toBeVisible();
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(1);
+  await speak.click();
+  await expect.poll(() => page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  await page.evaluate(() => (window as any).transcript("Continue in the original chat"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => fixture.writes.length).toBe(2);
+  expect(await page.evaluate(() => (window as any).probe.echo)).toBeFalsy();
+});
+
+test("manual playback Speak preserves an existing draft without capturing or sending", async ({ page }) => {
+  const fixture = await setup(page);
+  await companion(page, "Read this reply.", "completed", true);
+  await page.getByRole("button", { name: "Read aloud", exact: true }).click();
+  const draft = page.locator("textarea").last();
+  await draft.fill("Keep my typed words");
+  await page.getByRole("complementary", { name: "Speech playback" }).getByRole("button", { name: "Speak", exact: true }).click();
+  await expect(draft).toHaveValue("Keep my typed words");
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(0);
+  expect(await page.evaluate(() => (window as any).probe.audio)).toBeFalsy();
+  expect(fixture.writes).toHaveLength(0);
+});
+
+test("manual Coding playback returns from Settings and Speak sends only to its thread", async ({ page }) => {
+  const fixture = await setup(page, "coding");
+  const turns = [{ id: run, status: "completed", items: [{ id: "answer", type: "agentMessage", text: "Coding reply.", phase: "final_answer" }] }];
+  fixture.setTurns(turns);
+  await codex(page, "turn/started", { turn: { id: run, status: "inProgress", items: [] } }, 1);
+  await codex(page, "item/completed", { item: turns[0].items[0] }, 2);
+  await codex(page, "turn/completed", { turn: turns[0] }, 3);
+  await page.getByRole("button", { name: "Read aloud", exact: true }).click();
+  await expect.poll(() => spoken(page)).toHaveLength(1);
+  await navigate(page, "Settings");
+  const panel = page.getByRole("complementary", { name: "Speech playback" });
+  await panel.getByRole("button", { name: "Return to chat to speak" }).click();
+  const speak = panel.getByRole("button", { name: "Speak", exact: true });
+  await expect(speak).toBeVisible();
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(0);
+  await expect(page.getByRole("button", { name: "Conversation", exact: true })).toBeEnabled();
+  await speak.click();
+  await expect.poll(() => page.evaluate(() => (window as any).probe.starts)).toBe(1);
+  await page.evaluate(() => (window as any).transcript("Coding follow-up"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => fixture.writes.length).toBe(1);
+  expect(await page.evaluate(() => (window as any).probe.echo)).toBeFalsy();
+});
+
+for (const width of [390, 1440]) test(`Replay after Speak cancels capture, rereads the same reply and never auto-rearms at ${width}px`, async ({ page }) => {
+  const f = await setup(page, "companion", width);
+  await say(page);
+  f.setMessages([{ message_id: "reply", kind: "assistant", content: "Saved reply for replay.", turn_run_id: run, status: "finalized" }]);
+  await companion(page, "Saved reply for replay.", "completed", true);
+  await expect.poll(() => spoken(page)).toEqual(["Saved reply for replay."]);
+  const panel = page.getByRole("complementary", { name: "Speech playback" });
+  await panel.getByRole("button", { name: "Speak", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  const replay = panel.getByRole("button", { name: "Replay last output", exact: true });
+  await expect(replay).toBeVisible();
+  const box = await replay.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+  await replay.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => spoken(page)).toEqual(["Saved reply for replay.", "Saved reply for replay."]);
+  await page.evaluate(() => (window as any).finishAudio());
+  await page.clock.fastForward(12000);
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  expect(f.writes).toHaveLength(1);
+  expect(await page.evaluate(() => (window as any).probe.captureActive)).toBeFalsy();
+  expect(await page.evaluate(() => (window as any).probe.micDuringOutput)).toBeFalsy();
+});
+
+test("Replay survives Stop and completion, follows current exact text across navigation, and clears on logout", async ({ page }) => {
+  const f = await setup(page);
+  await say(page);
+  await companion(page, "Original answer.", "completed", true);
+  await expect.poll(() => spoken(page)).toHaveLength(1);
+  await page.getByRole("button", { name: "Stop playback" }).click();
+  await navigate(page, "Settings");
+  f.setMessages([{ message_id: "reply", kind: "assistant", content: "Current saved answer.", turn_run_id: run, status: "finalized" }]);
+  const replay = page.getByRole("button", { name: "Replay last output", exact: true });
+  await replay.click();
+  await expect.poll(() => spoken(page)).toEqual(["Original answer.", "Current saved answer."]);
+  await page.evaluate(() => (window as any).finishAudio());
+  await expect(page.getByText("Playback finished.", { exact: true })).toBeVisible();
+  await replay.click();
+  await expect.poll(() => spoken(page)).toEqual(["Original answer.", "Current saved answer.", "Current saved answer."]);
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event("leam:auth-lost")));
+  await expect(replay).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "Speech playback" })).toHaveCount(0);
+});
 
 test("automatic partials speak before completion; terminal status waits for authoritative text and natural speech completion", async ({
   page,
@@ -450,4 +580,42 @@ test("new explicit playback replaces the old target and late callbacks cannot st
     .poll(() => spoken(page))
     .toEqual(["First message. ", "Second message. ", "Tail complete."]);
   expect(await page.evaluate(() => (window as any).probe.starts)).toBe(0);
+});
+
+test('dismiss clears the retained playback panel and ignores late output', async ({ page }) => {
+  await setup(page);
+  await say(page);
+  await companion(page, 'First sentence. More');
+  await expect.poll(() => spoken(page)).toHaveLength(1);
+  await page.getByRole('button', { name: 'Stop playback', exact: true }).click();
+  const dismiss = page.getByRole('button', { name: 'Dismiss playback', exact: true });
+  await expect(dismiss).toBeVisible();
+  const box = await dismiss.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+  await dismiss.click();
+  await expect(page.getByRole('complementary', { name: 'Speech playback' })).toHaveCount(0);
+  await companion(page, 'First sentence. More final.', undefined, true);
+  await page.evaluate(() => (window as any).finishAudio());
+  await expect(page.getByRole('complementary', { name: 'Speech playback' })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(1);
+});
+
+test("dismiss during active audio cancels output and fences late native callbacks", async ({ page }) => {
+  await setup(page);
+  await say(page);
+  await companion(page, "First sentence. More");
+  await expect.poll(() => spoken(page)).toHaveLength(1);
+  expect(await page.evaluate(() => (window as any).probe.audio)).toBe(true);
+  await page.getByRole("button", { name: "Dismiss playback", exact: true }).click();
+  expect(await page.evaluate(() => (window as any).probe.audio)).toBe(false);
+  await expect(page.getByRole("complementary", { name: "Speech playback" })).toHaveCount(0);
+  await companion(page, "First sentence. More final.", undefined, true);
+  await page.evaluate(() => {
+    (window as any).utterance.onend?.();
+    (window as any).utterance.onerror?.({ error: "interrupted" });
+  });
+  await expect(page.getByRole("complementary", { name: "Speech playback" })).toHaveCount(0);
+  expect(await spoken(page)).toHaveLength(1);
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(1);
 });

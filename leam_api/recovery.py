@@ -178,12 +178,23 @@ class RestoreConfirm(BaseModel):
     confirmed: Literal[True]
 
 
+class MaintenanceAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    requestId: UUID
+
+
 class RestoreStart(RestoreConfirm):
     backupId: UUID
 
 
 def create_recovery_app(
-    directory: Path, origins: set[str], *, control=None, restore=None, deployment=None
+    directory: Path,
+    origins: set[str],
+    *,
+    control=None,
+    restore=None,
+    deployment=None,
+    drain=None,
 ):
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = directory.lstat()
@@ -218,6 +229,10 @@ def create_recovery_app(
     hasher = PasswordHasher()
     control = control or ServiceControl()
     deployment = deployment or (restore.deployment if restore else None)
+    if drain is None and deployment is not None:
+        from .maintenance import DrainControl
+
+        drain = DrainControl(deployment, control)
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     def signed_in(request):
@@ -356,6 +371,49 @@ def create_recovery_app(
         response.delete_cookie(COOKIE, secure=secure, httponly=True, samesite="strict")
         return {"authenticated": False}
 
+    def drain_required():
+        if drain is None or deployment is None:
+            raise HTTPException(503, "Maintenance control is not installed")
+        return drain
+
+    @app.get("/api/maintenance")
+    async def maintenance_status():
+        try:
+            return {"maintenance": drain_required().gate.status()}
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+
+    @app.post("/api/maintenance/prepare")
+    async def prepare_maintenance(body: MaintenanceAction):
+        manager = drain_required()
+        try:
+            with deployment.lock():
+                return await manager.prepare(str(body.requestId))
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+
+    @app.post("/api/maintenance/release")
+    async def release_maintenance(body: MaintenanceAction):
+        manager = drain_required()
+        try:
+            with deployment.lock():
+                # Inspect all receipts, including uncertain operations older than
+                # the UI's bounded history page, and even if controller load failed.
+                import json
+
+                from .backups import private_read as read_private
+
+                operations = deployment.roots.recovery / "restore-operations"
+                for path in operations.glob("*.json"):
+                    row = json.loads(read_private(path, 256 * 1024))
+                    if row.get("state") not in {"ready_for_uat", "rolled_back"}:
+                        raise ValueError(
+                            "A restore receipt needs review before maintenance can end"
+                        )
+                return {"maintenance": manager.gate.release(str(body.requestId))}
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+
     @app.get("/api/services")
     async def service_status():
         return {"services": await control.status(), "checkedAt": time.time()}
@@ -370,11 +428,11 @@ def create_recovery_app(
                 # Restarting a writer mid-restore would invalidate the safety
                 # boundary. Share its cross-process lock even across browsers.
                 with deployment.lock() if deployment else nullcontext():
+                    if drain is not None and action == "restart":
+                        await drain.guard_restart(service_id)
                     await settled(control.operate(service_id, action))
             except ValueError as error:
-                raise HTTPException(
-                    409, "A candidate restore or deployment is in progress"
-                ) from error
+                raise HTTPException(409, str(error)) from error
             except OSError as error:
                 raise HTTPException(503, "Service manager unavailable") from error
         return {"services": await control.status(), "checkedAt": time.time()}
@@ -454,6 +512,10 @@ def create_recovery_app(
             body.previewToken,
         )
 
+    @app.get("/maintenance.js")
+    async def maintenance_script():
+        return FileResponse(ASSETS / "maintenance.js", media_type="text/javascript")
+
     @app.get("/restore.js")
     async def restore_script():
         return FileResponse(ASSETS / "restore.js", media_type="text/javascript")
@@ -485,10 +547,10 @@ def application():
     # service controls until the fixed-root descriptor has been reviewed/created.
     from .candidate_deployment import CandidateDeployment, Roots
 
-    if (
-        directory == Roots.installed().recovery
-        and (directory / "candidate.json").exists()
-    ):
+    if directory == Roots.installed().recovery:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        deployment = CandidateDeployment()
+    if deployment is not None and (directory / "candidate.json").exists():
         from .mobile_restore import RestoreController
         from .restore_services import FixedRestoreServices
 

@@ -1,5 +1,6 @@
 """Commitments domain. UI and future companion tools call the same operations."""
 
+import copy
 import hashlib
 import json
 import time
@@ -18,6 +19,9 @@ from pydantic import (
     model_validator,
 )
 
+from .board_order import MoveCard, read_orders
+from .board_order import move as move_card
+
 
 class Input(BaseModel):
     model_config = ConfigDict(
@@ -35,8 +39,96 @@ class CapacityEdit(Capacity):
     revision: int = Field(ge=1)
 
 
+Owner = Literal["user", "leam"]
+Stage = Literal["todo", "in_progress", "blocked"]
+Priority = Literal["low", "normal", "high"]
+SubtaskStatus = Literal["todo", "in_progress", "blocked", "completed"]
+MAX_SUBTASKS = 32
+MAX_SUBTASK_DEPTH = 3
+
+
+class Subtask(Input):
+    id: uuid.UUID
+    title: str = Field(min_length=1, max_length=200)
+    owner: Owner = "user"
+    status: SubtaskStatus = "todo"
+    notes: str = Field(default="", max_length=500)
+    startDate: date | None = None
+    endDate: date | None = None
+    dueDate: date | None = None
+    children: list["Subtask"] = Field(default_factory=list, max_length=MAX_SUBTASKS)
+
+    @model_validator(mode="after")
+    def valid_dates(self):
+        if self.startDate and self.endDate and self.endDate < self.startDate:
+            raise ValueError("Subtask end date must be on or after start date")
+        return self
+
+
+def validate_subtasks(items):
+    seen = set()
+
+    def visit(rows, depth):
+        if rows and depth > MAX_SUBTASK_DEPTH:
+            raise ValueError("Subtasks support at most three levels")
+        for item in rows:
+            if item.id in seen:
+                raise ValueError("Subtask IDs must be unique across the card")
+            seen.add(item.id)
+            if len(seen) > MAX_SUBTASKS:
+                raise ValueError("A card supports at most 32 subtasks")
+            visit(item.children, depth + 1)
+
+    visit(items, 1)
+    return items
+
+
+class SubtaskChange(Input):
+    revision: int = Field(ge=1)
+    action: Literal["add", "edit", "remove"]
+    subtaskId: uuid.UUID
+    parentId: uuid.UUID | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    owner: Owner | None = None
+    status: SubtaskStatus | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    startDate: date | None = None
+    endDate: date | None = None
+    dueDate: date | None = None
+
+    @model_validator(mode="after")
+    def valid_action(self):
+        fields = self.model_fields_set - {"revision", "action", "subtaskId", "id"}
+        if self.action == "add" and not self.title:
+            raise ValueError("A new subtask needs a title")
+        if self.action != "add" and "parentId" in fields:
+            raise ValueError("Parent is only supplied when adding a subtask")
+        if self.action == "remove" and fields:
+            raise ValueError("Removal accepts only the exact subtask ID and revision")
+        if self.action == "edit" and not fields:
+            raise ValueError("Choose a subtask field to change")
+        return self
+
+
+def card_defaults(data):
+    # Read-time defaults keep older entities valid without rewriting user data.
+    return {
+        "owner": "user",
+        "stage": "todo",
+        "priority": "normal",
+        "dueDate": None,
+        "subtasks": [],
+        **data,
+    }
+
+
 class Commitment(Input):
     title: str = Field(min_length=1, max_length=500)
+    owner: Owner = "user"
+    stage: Stage = "todo"
+    priority: Priority = "normal"
+    dueDate: date | None = None
+    subtasks: list[Subtask] = Field(default_factory=list, max_length=MAX_SUBTASKS)
     kind: Literal["task", "habit", "goal"] = "task"
     measure: Literal["boolean", "count", "minutes"] = "boolean"
     target: float = Field(default=1, ge=0, le=1000000)
@@ -64,6 +156,7 @@ class Commitment(Input):
     def valid_window(self):
         if self.startDate and self.endDate and self.endDate < self.startDate:
             raise ValueError("End date must be on or after start date")
+        validate_subtasks(self.subtasks)
         if self.measure == "boolean":
             self.target = 1
         return self
@@ -71,6 +164,11 @@ class Commitment(Input):
 
 class CommitmentEdit(Input):
     revision: int = Field(ge=1)
+    owner: Owner | None = None
+    stage: Stage | None = None
+    priority: Priority | None = None
+    dueDate: date | None = None
+    subtasks: list[Subtask] | None = Field(default=None, max_length=MAX_SUBTASKS)
     title: str | None = Field(default=None, min_length=1, max_length=500)
     kind: Literal["task", "habit", "goal"] | None = None
     measure: Literal["boolean", "count", "minutes"] | None = None
@@ -83,6 +181,11 @@ class CommitmentEdit(Input):
     timezone: str | None = None
     reminderTime: str | None = None
     reward: str | None = None
+
+    @field_validator("subtasks")
+    @classmethod
+    def bounded_subtasks(cls, value):
+        return validate_subtasks(value) if value is not None else value
 
 
 class Progress(Input):
@@ -119,7 +222,8 @@ class CapacityRemoval(Removal):
 
 
 def entity(row):
-    return dict(json.loads(row["body"]), id=row["id"], revision=row["revision"])
+    result = dict(json.loads(row["body"]), id=row["id"], revision=row["revision"])
+    return card_defaults(result) if row["kind"] == "commitment" else result
 
 
 def initial_log(day):
@@ -151,11 +255,17 @@ class Commitments:
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._capacity(db, body.capacityId)
+            from .completion_evidence import stamp_changes
+
+            stamp_changes({}, data)
             db.execute(
                 "INSERT INTO entities VALUES (?,?,?,?,?)",
                 (key, "commitment", 1, json.dumps(data), time.time()),
             )
             result = dict(data, id=key, revision=1)
+            from .completion_evidence import record_changes
+
+            record_changes(db, key, 1, {}, data)
             if record:
                 record(db, result)
         return result
@@ -172,18 +282,119 @@ class Commitments:
                 raise ValueError("Changed on another device. Reload before saving.")
             data = Commitment(
                 **dict(
-                    json.loads(row["body"]),
+                    {
+                        k: v
+                        for k, v in json.loads(row["body"]).items()
+                        if k in Commitment.model_fields
+                    },
                     **body.model_dump(
                         mode="json", exclude_unset=True, exclude={"revision"}
                     ),
                 )
             ).model_dump(mode="json")
             self._capacity(db, data["capacityId"])
+            from .completion_evidence import stamp_changes
+
+            stamp_changes(json.loads(row["body"]), data)
             db.execute(
                 "UPDATE entities SET body=?,revision=revision+1,updated=? WHERE id=?",
                 (json.dumps(data), time.time(), key),
             )
             result = dict(data, id=key, revision=body.revision + 1)
+            from .completion_evidence import record_changes
+
+            record_changes(
+                db,
+                key,
+                result["revision"],
+                json.loads(row["body"]),
+                data,
+            )
+            if record:
+                record(db, result)
+        return result
+
+    @staticmethod
+    def _change_subtask(current, body):
+        data = copy.deepcopy(current)
+        tree = data.setdefault("subtasks", [])
+        nodes = {}
+
+        def visit(rows):
+            for node in rows:
+                nodes[node["id"]] = (node, rows)
+                visit(node.get("children", []))
+
+        visit(tree)
+        key = str(body.subtaskId)
+        fields = body.model_dump(
+            mode="json",
+            exclude_unset=True,
+            exclude={"revision", "action", "subtaskId", "parentId", "id"},
+        )
+        if body.action == "add":
+            if key in nodes:
+                raise ValueError("Subtask ID already exists; read the current card")
+            siblings = tree
+            if body.parentId:
+                parent = nodes.get(str(body.parentId))
+                if not parent:
+                    raise KeyError("Parent subtask not found")
+                siblings = parent[0].setdefault("children", [])
+            siblings.append(
+                Subtask(id=body.subtaskId, **fields).model_dump(mode="json")
+            )
+        else:
+            found = nodes.get(key)
+            if not found:
+                raise KeyError("Subtask not found")
+            node, siblings = found
+            if body.action == "remove":
+                siblings.remove(node)
+            else:
+                node.update(fields)
+        return Commitment(
+            **{k: v for k, v in data.items() if k in Commitment.model_fields}
+        ).model_dump(mode="json")
+
+    def preview_subtask(self, key, body):
+        with self.store.connect() as db:
+            row = db.execute(
+                "SELECT * FROM entities WHERE id=? AND kind='commitment'", (key,)
+            ).fetchone()
+            if row is None:
+                raise KeyError("Commitment not found")
+            if row["revision"] != body.revision:
+                raise ValueError("Changed on another device. Reload before saving.")
+            current = entity(row)
+            return {
+                "before": current,
+                "after": self._change_subtask(current, body),
+                "assignment": "Ownership only; assigning Leam does not start execution.",
+            }
+
+    def subtask(self, key, body, *, record=None):
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM entities WHERE id=? AND kind='commitment'", (key,)
+            ).fetchone()
+            if row is None:
+                raise KeyError("Commitment not found")
+            if row["revision"] != body.revision:
+                raise ValueError("Changed on another device. Reload before saving.")
+            data = self._change_subtask(entity(row), body)
+            from .completion_evidence import stamp_changes
+
+            stamp_changes(json.loads(row["body"]), data)
+            db.execute(
+                "UPDATE entities SET body=?,revision=revision+1,updated=? WHERE id=?",
+                (json.dumps(data), time.time(), key),
+            )
+            result = dict(data, id=key, revision=body.revision + 1)
+            from .completion_evidence import record_changes
+
+            record_changes(db, key, result["revision"], json.loads(row["body"]), data)
             if record:
                 record(db, result)
         return result
@@ -270,8 +481,12 @@ class Commitments:
                 (key, day, log["revision"], json.dumps(log)),
             )
             if current["kind"] == "task":
+                from .completion_evidence import record_changes, stamp_changes
+
+                before = dict(current)
                 current["status"] = "completed" if log["done"] else "active"
                 current["revision"] += 1
+                stamp_changes(before, current)
                 stored = {
                     k: v for k, v in current.items() if k not in ["id", "revision"]
                 }
@@ -279,6 +494,7 @@ class Commitments:
                     "UPDATE entities SET body=?,revision=?,updated=? WHERE id=?",
                     (json.dumps(stored), current["revision"], time.time(), key),
                 )
+                record_changes(db, key, current["revision"], before, current)
             if log["done"]:
                 if current["kind"] == "task":
                     db.execute(
@@ -552,7 +768,19 @@ def router(store):
 
     @routes.get("/commitments")
     async def commitments():
-        return {"items": store.entities("commitment")}
+        with store.connect() as db:
+            db.execute("BEGIN")
+            cards = [
+                entity(row)
+                for row in db.execute(
+                    "SELECT * FROM entities WHERE kind='commitment' ORDER BY updated DESC"
+                )
+            ]
+            return {"items": cards, "boardOrders": read_orders(db, cards)}
+
+    @routes.put("/commitments/order")
+    async def reorder(body: MoveCard):
+        return call(move_card, store, body)
 
     @routes.post("/commitments")
     async def create(body: Commitment):
@@ -561,6 +789,10 @@ def router(store):
     @routes.patch("/commitments/{key}")
     async def edit(key: str, body: CommitmentEdit):
         return call(domain.edit, key, body)
+
+    @routes.post("/commitments/{key}/subtasks")
+    async def change_subtask(key: str, body: SubtaskChange):
+        return call(domain.subtask, key, body)
 
     @routes.get("/today")
     async def today(day: date | None = Query(default=None, alias="date")):

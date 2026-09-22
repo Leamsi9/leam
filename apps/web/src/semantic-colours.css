@@ -1,0 +1,65 @@
+/* Shared semantic surfaces: dark text on warm tints, stronger colour for graphics.
+   Status labels are mandatory; hue never supplies the only meaning. */
+.semantic-colour {
+  --semantic-surface: var(--semantic-neutral-surface);
+  --semantic-ink: var(--semantic-neutral-ink);
+  --semantic-line: var(--semantic-neutral-line);
+  --semantic-solid: var(--semantic-neutral-solid);
+}
+.semantic-colour[data-tone="info"] {
+  --semantic-surface: var(--semantic-info-surface);
+  --semantic-ink: var(--semantic-info-ink);
+  --semantic-line: var(--semantic-info-line);
+  --semantic-solid: var(--semantic-info-solid);
+}
+.semantic-colour[data-tone="success"] {
+  --semantic-surface: var(--semantic-success-surface);
+  --semantic-ink: var(--semantic-success-ink);
+  --semantic-line: var(--semantic-success-line);
+  --semantic-solid: var(--semantic-success-solid);
+}
+.semantic-colour[data-tone="warning"] {
+  --semantic-surface: var(--semantic-warning-surface);
+  --semantic-ink: var(--semantic-warning-ink);
+  --semantic-line: var(--semantic-warning-line);
+  --semantic-solid: var(--semantic-warning-solid);
+}
+.semantic-colour[data-tone="danger"] {
+  --semantic-surface: var(--semantic-danger-surface);
+  --semantic-ink: var(--semantic-danger-ink);
+  --semantic-line: var(--semantic-danger-line);
+  --semantic-solid: var(--semantic-danger-solid);
+}
+.semantic-colour[data-tone="violet"] {
+  --semantic-surface: var(--semantic-violet-surface);
+  --semantic-ink: var(--semantic-violet-ink);
+  --semantic-line: var(--semantic-violet-line);
+  --semantic-solid: var(--semantic-violet-solid);
+}
+.semantic-colour[data-tone="personal"] {
+  --semantic-surface: var(--semantic-personal-surface);
+  --semantic-ink: var(--semantic-personal-ink);
+  --semantic-line: var(--semantic-personal-line);
+  --semantic-solid: var(--semantic-personal-solid);
+}
+.semantic-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 7px;
+  border-radius: 7px;
+  border: 1px solid var(--semantic-line);
+  background: var(--semantic-surface);
+  color: var(--semantic-ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+@media (forced-colors: active) {
+  .semantic-badge {
+    border-color: CanvasText;
+  }
+}

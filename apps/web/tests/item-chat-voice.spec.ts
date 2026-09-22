@@ -78,3 +78,16 @@ test('dictation and typed input stop the actually active item conversation, not 
   await panel(page,'B').getByRole('button',{name:'Send to Leam',exact:true}).click();
   await expect.poll(()=>sends.length).toBe(1);expect(sends[0]).toEqual({path:'/api/companion/threads/item-b/messages',text:'Typed item B'});
 });
+
+test('Ear ownership stays with its item until another explicit Ear activation',async({page})=>{
+  const {sends}=await setup(page);
+  await panel(page,'A').getByRole('button',{name:'Active listening (5 minutes)',exact:true}).click();
+  await openB(page);
+  await expect(panel(page,'A').getByRole('button',{name:'Stop active listening',exact:true})).toBeVisible();
+  await panel(page,'B').getByRole('button',{name:'Active listening (5 minutes)',exact:true}).click();
+  await expect(panel(page,'A').getByRole('button',{name:'Stop active listening',exact:true})).toHaveCount(0);
+  await expect(panel(page,'B').getByRole('button',{name:'Stop active listening',exact:true})).toBeVisible();
+  await page.clock.fastForward(12000);
+  expect(sends).toHaveLength(0);
+  expect(await page.evaluate(()=>(window as any).probe.starts)).toBe(2);
+});

@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -71,10 +71,19 @@ def main():
         ).strip()
         if Path(proof).resolve() != (stage / "leam_api/app.py").resolve():
             raise ValueError("Application import did not resolve inside staged release")
+        assets = stage / "apps/web/dist/assets"
+        asset_hashes = {}
+        for asset in sorted(assets.iterdir()):
+            if not asset.is_file() or asset.is_symlink() or asset.parent.resolve() != assets.resolve():
+                raise ValueError("Client assets must be regular files inside the staged asset directory")
+            asset_hashes[asset.name] = hashlib.sha256(asset.read_bytes()).hexdigest()
+        if not asset_hashes:
+            raise ValueError("Client artifact has no assets")
         manifest = {
             "schemaVersion": 1,
+            "assetsSha256": asset_hashes,
             "sourceCommit": source,
-            "stagedAt": datetime.now(timezone.utc).isoformat(),
+            "stagedAt": datetime.now(UTC).isoformat(),
             "clientIndexSha256": hashlib.sha256(
                 (client / "index.html").read_bytes()
             ).hexdigest(),

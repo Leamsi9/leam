@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-async function setup(page: any, connected = true) {
+import { navigate } from "./navigation";
+async function setup(page: any, connected = true, initiallyActive = false, transport = "ide-owner") {
   await page.addInitScript(() => {
     const w = window as any;
     localStorage.setItem(
@@ -53,9 +54,10 @@ async function setup(page: any, connected = true) {
       onerror: any;
       constructor(url: string) {
         super();
-        if (url === "/api/events") w.stream = this;
+        if (url.startsWith("/api/events")) (w.streams ||= []).push(this);
       }
-      close() {}
+      closed = false;
+      close() { this.closed = true; }
     };
   });
 
@@ -69,7 +71,7 @@ async function setup(page: any, connected = true) {
       ],
     },
   ];
-  let active = "";
+  let active = initiallyActive ? "turn-existing" : "";
   let unknown = false;
   let operation = "start";
   await page.route("**/api/**", async (route: any) => {
@@ -82,7 +84,7 @@ async function setup(page: any, connected = true) {
           {
             id: "coding-a",
             name: "Shared fixture",
-            transport: "ide-owner",
+            transport,
             generation: "owner-generation",
           },
         ],
@@ -90,7 +92,7 @@ async function setup(page: any, connected = true) {
     if (path === "/api/codex/threads/coding-a")
       body = {
         connected,
-        thread: { id: "coding-a", transport: "ide-owner" },
+        thread: { id: "coding-a", transport },
         generation: "owner-generation",
         activeTurnId: active,
       };
@@ -102,7 +104,7 @@ async function setup(page: any, connected = true) {
           ? {}
           : {
               turn: { id: "turn-matching", status: "inProgress" },
-              transport: "ide-owner",
+              transport,
               operation,
             };
       } else body = { data: [...turns].reverse() };
@@ -124,17 +126,22 @@ async function setup(page: any, connected = true) {
     unknown: () => {
       unknown = true;
     },
-    async update(items: any[], status = "inProgress", id = "turn-matching") {
+    async update(items: any[], status = "inProgress", id = "turn-matching", stillActive = false) {
       turns = [{ id, status, items }];
-      active = status === "inProgress" ? id : "";
-      await page.evaluate(() => {
-        (window as any).stream.onmessage({
-          data: JSON.stringify({
-            topic: "codex.shared",
-            payload: { threadId: "coding-a", connected: true },
-          }),
-        });
-      });
+      active = stillActive ? "turn-other-running" : status === "inProgress" ? id : "";
+      await page.evaluate(({ transport, id, status, items }) => {
+        const emit = (data: any) => {
+          for (const stream of (window as any).streams || [])
+            if (!stream.closed) stream.onmessage?.({ data: JSON.stringify(data) });
+        };
+        if (transport === "ide-owner") emit({ topic: "codex.shared", payload: { threadId: "coding-a", connected: true } });
+        else {
+          const packet = (method: string, extra: any) => emit({ topic: "codex", payload: { method, params: { threadId: "coding-a", ...extra } } });
+          packet("turn/started", { turn: { id, status: "inProgress", items: [] } });
+          for (const item of items) packet("item/completed", { turnId: id, item });
+          if (status !== "inProgress") packet("turn/completed", { turn: { id, status } });
+        }
+      }, { transport, id, status, items });
       await page.clock.fastForward(200);
     },
   };
@@ -255,6 +262,54 @@ test("Coding follow-up acceptance does not speak an existing active turn", async
   await expect(page.getByLabel("Message Codex")).toHaveValue("");
 });
 
+test("active shared Coding allows explicit conversation steering without claiming a new reply", async ({ page }) => {
+  const f = await setup(page, true, true);
+  f.steer();
+  const conversation = page.getByRole("button", { name: "Conversation", exact: true });
+  await expect(conversation).toBeEnabled();
+  await conversation.click();
+  await page.evaluate(() => (window as any).transcript("Change the current approach"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => f.sends.length).toBe(1);
+  expect(f.sends[0]).toMatchObject({ text: "Change the current approach", generation: "owner-generation" });
+  await expect(page.getByText(/delivered as a follow-up/)).toBeVisible();
+  await f.update([{ id: "prior-answer", type: "agentMessage", text: "Existing run output" }], "completed");
+  expect(await page.evaluate(() => (window as any).probe.spoken)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(1);
+  await expect(page.getByLabel("Message Codex")).toHaveValue("");
+});
+
+test("shared Coding Ear uses the same owner-bound follow-up and review receipt", async ({ page }) => {
+  const f = await setup(page, true, true);
+  f.steer();
+  await page.getByRole("button", { name: "Active listening (5 minutes)", exact: true }).click();
+  await page.clock.fastForward(15000);
+  expect(f.sends).toHaveLength(0);
+  await page.evaluate(() => (window as any).transcript("Owner-bound voice follow-up"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => f.sends.length).toBe(1);
+  expect(f.sends[0]).toMatchObject({ text: "Owner-bound voice follow-up", generation: "owner-generation" });
+  await expect(page.getByText(/delivered as a follow-up/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop active listening", exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).probe.spoken)).toEqual([]);
+});
+
+test("Coding automatic rearm still waits for authoritative active-turn clearance", async ({ page }) => {
+  const f = await setup(page);
+  await page.getByRole("button", { name: "Conversation", exact: true }).click();
+  await page.evaluate(() => (window as any).transcript("Read the matched result"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => f.sends.length).toBe(1);
+  const answer = [{ id: "answer", type: "agentMessage", text: "Matched reply." }];
+  await f.update(answer, "completed", "turn-matching", true);
+  await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["Matched reply."]);
+  await page.evaluate(() => (window as any).utterance.onend?.());
+  await expect(page.getByText("Checking response completion…", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(1);
+  await f.update(answer, "completed");
+  await expect.poll(() => page.evaluate(() => (window as any).probe.starts)).toBe(2);
+});
+
 test("Coding honors an existing explicit two-second browser pause", async ({
   page,
 }) => {
@@ -272,4 +327,127 @@ test("Coding honors an existing explicit two-second browser pause", async ({
   expect(f.sends).toHaveLength(0);
   await page.clock.fastForward(1000);
   await expect.poll(() => f.sends.length).toBe(1);
+});
+
+
+for (const transport of ["ide-owner", "app-server"]) {
+  test(`${transport} Coding speaker is below output and latest replay works before any playback`, async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    const f = await setup(page, true, false, transport);
+    const article = page.locator("#coding-message-old-answer");
+    const below = await article.evaluate((node) => !!(node.querySelector(".prose")!.compareDocumentPosition(node.querySelector("button")!) & Node.DOCUMENT_POSITION_FOLLOWING));
+    expect(below).toBe(true);
+    expect(await page.evaluate(() => (window as any).probe.spoken)).toEqual([]);
+    await page.getByRole("button", { name: "Replay last reply", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["Old private reply"]);
+    await page.getByRole("button", { name: "Dismiss playback", exact: true }).click();
+    await f.update([{ id: "new-answer", type: "agentMessage", phase: "final_answer", text: "Newest completed reply." }], "completed");
+    await page.getByRole("button", { name: "Replay last reply", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["Old private reply", "Newest completed reply."]);
+  });
+
+  test(`${transport} conversation reads matching final-answer stream and completion only while enabled`, async ({ page }) => {
+    const f = await setup(page, true, false, transport);
+    await page.getByRole("button", { name: "Conversation", exact: true }).click();
+    await page.evaluate(() => (window as any).transcript("Read the current result"));
+    await page.clock.fastForward(4100);
+    await expect.poll(() => f.sends.length).toBe(1);
+    await f.update([{ id: "spoken", type: "agentMessage", phase: "final_answer", text: "First new sentence. The next sentence" }]);
+    await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["First new sentence. "]);
+    await page.setViewportSize({ width: 360, height: 780 });
+    const fits = await page.locator(".voice-status-row").evaluate((row) => Array.from(row.querySelectorAll("button")).every((button) => {
+      const box = button.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth;
+    }));
+    expect(fits).toBe(true);
+    await page.getByRole("button", { name: "End conversation", exact: true }).click();
+    await f.update([{ id: "spoken", type: "agentMessage", phase: "final_answer", text: "First new sentence. The next sentence is complete." }], "completed");
+    expect(await page.evaluate(() => (window as any).probe.spoken)).toEqual(["First new sentence. "]);
+  });
+}
+
+test("shared spoken steering reads only appended/new answer text from its baseline", async ({ page }) => {
+  const f = await setup(page);
+  const old = { id: "answer", type: "agentMessage", phase: "final_answer", text: "Already displayed answer. " };
+  await f.update([old]);
+  f.steer();
+  await page.getByRole("button", { name: "Conversation", exact: true }).click();
+  await page.evaluate(() => (window as any).transcript("Continue and read the new result"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => f.sends.length).toBe(1);
+  await f.update([old]);
+  await f.update([{ ...old, text: "Already displayed" }]);
+  expect(await page.evaluate(() => (window as any).probe.spoken)).toEqual([]);
+  await f.update([{ ...old, text: old.text + "New result after your request. More follows" }]);
+  await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["New result after your request. "]);
+  await page.evaluate(() => (window as any).utterance.onend?.());
+  await f.update([{ ...old, text: old.text + "New result after your request. More follows here." }], "completed");
+  await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["New result after your request. ", "More follows here."]);
+});
+
+test("shared steering suppresses historical output and stops on a rewritten baseline", async ({ page }) => {
+  const f = await setup(page);
+  const old = { id: "answer", type: "agentMessage", phase: "final_answer", text: "Already displayed answer." };
+  await f.update([old]); f.steer();
+  await page.getByRole("button", { name: "Conversation", exact: true }).click();
+  await page.evaluate(() => (window as any).transcript("Continue"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => f.sends.length).toBe(1);
+  await f.update([{ ...old, text: "A replacement of old content." }], "completed");
+  expect(await page.evaluate(() => (window as any).probe.spoken)).toEqual([]);
+  await expect(page.getByRole("button", { name: "Resume conversation", exact: true })).toBeVisible();
+});
+
+
+test("shared steering reads a new final-answer item without replaying the baseline", async ({ page }) => {
+  const f = await setup(page);
+  const old = { id: "before", type: "agentMessage", phase: "commentary", text: "Old progress message." };
+  await f.update([old]); f.steer();
+  await page.getByRole("button", { name: "Conversation", exact: true }).click();
+  await page.evaluate(() => (window as any).transcript("Read the next result"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => f.sends.length).toBe(1);
+  await f.update([old, { id: "after", type: "agentMessage", phase: "final_answer", text: "New final result." }], "completed");
+  await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["New final result."]);
+});
+
+
+for (const transport of ["ide-owner", "app-server"]) {
+  test(`${transport} conversation automatically reads its completed answer`, async ({ page }) => {
+    const f = await setup(page, true, false, transport);
+    await page.getByRole("button", { name: "Conversation", exact: true }).click();
+    await page.evaluate(() => (window as any).transcript("Complete this spoken request"));
+    await page.clock.fastForward(4100);
+    await expect.poll(() => f.sends.length).toBe(1);
+    await f.update([{ id: "answer", type: "agentMessage", phase: "final_answer", text: "Your completed result." }], "completed");
+    await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["Your completed result."]);
+  });
+}
+
+test("navigation preserves exact-source new shared readout without rearming capture", async ({ page }) => {
+  const f = await setup(page);
+  const old = { id: "before", type: "agentMessage", phase: "final_answer", text: "Old answer. " };
+  await f.update([old]); f.steer();
+  await page.getByRole("button", { name: "Conversation", exact: true }).click();
+  await page.evaluate(() => (window as any).transcript("Continue"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => f.sends.length).toBe(1);
+  const captureStarts = await page.evaluate(() => (window as any).probe.starts);
+  await navigate(page, "Companion");
+  await page.evaluate(() => {
+    for (const stream of (window as any).streams || []) {
+      if (!stream.closed) stream.onmessage?.({ data: JSON.stringify({
+        topic: "codex", payload: { method: "item/completed", params: {
+          threadId: "destination-thread", turnId: "destination-turn",
+          item: { id: "destination-answer", type: "agentMessage", phase: "final_answer", text: "Destination must not be read." },
+        } },
+      }) });
+    }
+  });
+  expect(await page.evaluate(() => (window as any).probe.spoken)).toEqual([]);
+  await f.update([{ ...old, text: old.text + "Later output." }], "completed");
+  await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["Later output."]);
+  await page.evaluate(() => (window as any).utterance.onend?.());
+  await page.clock.fastForward(10000);
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(captureStarts);
+  expect(f.sends).toHaveLength(1);
 });

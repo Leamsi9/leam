@@ -154,6 +154,20 @@ class PrivateIdeStream(PrivateIdeReader):
                     pass
 
 
+def runtime_status(snapshot: SessionSnapshot | None) -> str:
+    """Expose only observed runtime enums, never owner error payloads or paths."""
+    raw = snapshot.state.get("threadRuntimeStatus") if snapshot else None
+    value = raw.get("type") if isinstance(raw, dict) else None
+    return (
+        value if value in ("idle", "active", "notLoaded", "systemError") else "unknown"
+    )
+
+
+def runtime_blocked(snapshot: SessionSnapshot | None) -> bool:
+    # Unknown/missing fields retain compatibility with older pinned snapshots.
+    return runtime_status(snapshot) in ("notLoaded", "systemError")
+
+
 def project_snapshot(snapshot: SessionSnapshot) -> dict:
     """Return at most 50 recent conversation messages and 128KiB of message text.
 
@@ -272,6 +286,7 @@ def project_snapshot(snapshot: SessionSnapshot) -> dict:
             "reasoningEffort": metadata("effort", "latestReasoningEffort"),
         },
         "revision": snapshot.revision,
+        "runtimeStatus": runtime_status(snapshot),
         "activeTurnId": active_turn,
         "transport": "ide-owner",
         "truncated": truncated,

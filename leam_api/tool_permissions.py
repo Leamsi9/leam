@@ -14,7 +14,9 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 
 from .commitments import Input
+from .document_tools import CAPABILITIES as DOCUMENT_CAPABILITIES
 from .ironclaw import IronClaw, RuntimeError
+from .web_search import CAPABILITIES as WEB_SEARCH_CAPABILITIES
 
 STATES = {"always_allow", "ask_each_time", "disabled"}
 ALLOWED = frozenset(
@@ -24,12 +26,21 @@ ALLOWED = frozenset(
         "ironclaw.memory.read",
         "ironclaw.memory.search",
         "ironclaw.memory.tree",
+        *WEB_SEARCH_CAPABILITIES,
+        *DOCUMENT_CAPABILITIES,
         *(
             "mcp-leam." + name
             for name in (
+                "create_inbox_item",
+                "leam_inbox",
+                "leam_email_draft",
+                "leam_resources",
+                "leam_resource_save",
+                "leam_background_job",
                 "leam_system",
                 "leam_context",
                 "leam_today",
+                "leam_email",
                 "leam_calendar_events",
                 "leam_calendar_links",
                 "leam_calendar_inspect",
@@ -52,12 +63,9 @@ LOOP_HELPERS = frozenset(
 PROTECTED = frozenset(
     {
         "builtin.shell",
-        "builtin.write_file",
         "builtin.apply_patch",
         "builtin.spawn_subagent",
         "builtin.http.save",
-        "builtin.document_edit",
-        "builtin.html_to_pdf",
         "builtin.admin_configuration_replace",
         "builtin.operator_config_set_auto_approve",
         "builtin.operator_config_set_tool_permission",
@@ -130,7 +138,9 @@ def catalog(raw):
                     "source": value["effective_source"],
                     "locked": value["locked"] or not entry["mutable"],
                     "protected": name not in ALLOWED,
-                    "recommendedState": "always_allow"
+                    "recommendedState": "ask_each_time"
+                    if name == "mcp-leam.create_inbox_item"
+                    else "always_allow"
                     if name in ALLOWED
                     else "disabled",
                 }

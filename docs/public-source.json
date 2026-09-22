@@ -1,0 +1,20 @@
+{
+  "sourceCommit": "a698e90c7fa5e1fe366dba951d5cfa8347e0c88c",
+  "publicParent": "98d2a4c52b3c9ddf8d27e7cf2ee73a4e9a7a9d22",
+  "publication": "Audited source snapshot on the existing public lineage; not a merge of private development history.",
+  "runtimeSources": "apps, leam_api, contracts, dependency pins and existing source scripts copied unchanged.",
+  "omitted": "Private engineering plans, local research/evidence documents and installation workstream status; no user state is copied.",
+  "retainedPublicDocs": [
+    ".gitignore",
+    "AGENTS.md",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/deployment.md",
+    "docs/system-map.md",
+    "docs/test-coverage-map.md"
+  ],
+  "documentationPathRedactions": [
+    "docs/architecture/remember-integration.md",
+    "docs/architecture/voice-contract.md"
+  ]
+}

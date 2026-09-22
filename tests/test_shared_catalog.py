@@ -92,7 +92,13 @@ def test_shared_metadata_responds_while_native_list_is_still_pending(
         assert bridge.calls == [
             (
                 "thread/list",
-                {"limit": 50, "sourceKinds": ["cli", "vscode", "appServer"]},
+                {
+                    "limit": 50,
+                    "sourceKinds": ["cli", "vscode", "appServer"],
+                    "sortKey": "recency_at",
+                    "sortDirection": "desc",
+                    "archived": False,
+                },
                 None,
             )
         ]

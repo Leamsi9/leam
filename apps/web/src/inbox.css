@@ -1,0 +1,147 @@
+.inbox-page {
+  max-width: 58rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+.inbox-heading,
+.inbox-actions,
+.inbox-toolbar,
+.inbox-content footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.inbox-heading h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+.inbox-heading p {
+  margin: 0.35rem 0 1rem;
+  color: var(--sub);
+}
+.inbox-unread-dot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--semantic-personal-solid);
+  margin-left: 0.3rem;
+  flex-shrink: 0;
+}
+.inbox-toolbar {
+  font-size: 0.88rem;
+  margin: 0.5rem 0 0.85rem;
+  flex-wrap: wrap;
+}
+.inbox-list {
+  display: grid;
+  gap: 0.6rem;
+}
+.inbox-card {
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: var(--paper);
+  overflow: hidden;
+}
+.inbox-card[data-unread="true"] {
+  border-left: 4px solid var(--semantic-personal-solid);
+  background: color-mix(in srgb, var(--semantic-personal-solid) 5%, var(--paper));
+}
+.inbox-card summary {
+  padding: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+.inbox-title {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.inbox-title .inbox-unread-dot {
+  margin: 0 0.45rem 0 0;
+}
+.inbox-card time {
+  color: var(--sub);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+.inbox-content {
+  padding: 0 0.9rem 0.9rem;
+}
+.inbox-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+.inbox-content footer {
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+.inbox-content footer small {
+  color: var(--sub);
+}
+.inbox-content button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.inbox-links {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.88rem;
+}
+.inbox-links a {
+  padding: 0.3rem 0.5rem;
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--semantic-personal-solid) 10%, transparent);
+}
+.inbox-compose {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.inbox-compose label {
+  display: grid;
+  gap: 0.3rem;
+}
+.inbox-compose div {
+  display: flex;
+  gap: 0.5rem;
+}
+@media (max-width: 480px) {
+  .inbox-card summary {
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .inbox-page {
+    padding: 0.75rem;
+  }
+}
+.today-app .inbox-page { max-width: none; padding: 0; }
+.inbox-source { display: block; width: fit-content; font-size: .7rem; font-weight: 650; padding: .15rem .4rem; margin-bottom: .25rem; border-radius: .4rem; color: var(--semantic-personal-ink); background: var(--semantic-personal-surface); }
+.inbox-source[data-source="mail"] { color: var(--semantic-warning-ink); background: var(--semantic-warning-surface); }
+.inbox-mail-card[data-unread="true"] { border-left-color: var(--semantic-warning-solid); background: color-mix(in srgb, var(--semantic-warning-solid) 5%, var(--paper)); }
+.inbox-filters { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.inbox-filters label { display: flex; align-items: center; gap: .4rem; }
+.inbox-filters select { max-width: min(20rem, 65vw); }
+.inbox-unread-filter input { width: auto; }
+.inbox-card summary { padding: .6rem .8rem; }
+.inbox-mail-card .today-row-actions { margin-top: .5rem; }
+.inbox-heading { flex-wrap: wrap; }
+.inbox-actions { flex-wrap: wrap; }
+.inbox-selection-toolbar, .inbox-removal-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .6rem 0; }
+.inbox-selectable-row { display: flex; gap: .35rem; align-items: flex-start; min-width: 0; }
+.inbox-selectable-row > .inbox-card { flex: 1; min-width: 0; }
+.inbox-item-select { display: flex; min-width: 2.5rem; min-height: 2.75rem; align-items: center; justify-content: center; }
+.inbox-item-select input { width: 1.1rem; height: 1.1rem; }
+.inbox-removal-dialog ul { max-height: 35vh; overflow: auto; padding-left: 1.3rem; overflow-wrap: anywhere; }
+.inbox-removal-actions { justify-content: flex-end; }

@@ -11,6 +11,12 @@ for (const width of [390, 1440])
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 });
+    await page.addInitScript(() => {
+      (window as any).__approvalRefreshes = 0;
+      window.addEventListener("leam:approvals-changed", () => {
+        (window as any).__approvalRefreshes++;
+      });
+    });
     const original = "  Inspect exactly.\nDo not rewrite this.  ";
     let reviewText = "",
       starts = 0,
@@ -144,6 +150,7 @@ for (const width of [390, 1440])
     await page.locator(".conversation-list-toggle").click();
     await expect(page.locator('[data-thread-id="dedicated"]')).toHaveCount(1);
     expect(starts).toBe(1);
+    expect(await page.evaluate(() => (window as any).__approvalRefreshes)).toBe(1);
     expect(reviewText).toBe(original);
     // The visible title confirms the source handoff chose its own target, not the build owner.
     await expect(

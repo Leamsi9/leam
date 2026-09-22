@@ -11,13 +11,20 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from . import memory_policy, memory_projection
+from .agenda import Selection
+from .background_jobs import JobTool
 from .commitments import Input
 from .context_reader import ContextKind, ContextReader
+from .email_drafts import DraftQuery, EmailDrafts
+from .inbox import Inbox, InboxCreate, InboxQuery
+from .mail_read import MailTool
 from .proposals import INPUTS, Operation, Propose
+from .resource_tools import ResourceQuery, ResourceSave, ResourceTools
 from .system_inspection import SystemQuery
+from .tool_scope import HostScope, ScopeProof
 
 
 class Page(Input):
@@ -35,6 +42,21 @@ class ContextQuery(Page):
 
 class TodayQuery(Page):
     date: CalendarDate | None = None
+    view: Literal["commitments", "agenda"] = "commitments"
+    timezone: str | None = None
+    focusOnly: bool = False
+
+    @model_validator(mode="after")
+    def scoped_agenda(self):
+        if self.view == "agenda":
+            if self.date is None or self.timezone is None:
+                raise ValueError(
+                    "Agenda reads require an explicit date and IANA timezone"
+                )
+            Selection(date=self.date, timezone=self.timezone)
+        elif self.timezone is not None or self.focusOnly:
+            raise ValueError("Timezone and Focus filtering require view=agenda")
+        return self
 
 
 class CalendarQuery(Page):
@@ -59,6 +81,13 @@ class SchemaQuery(Input):
 
 class ToolCall(Input):
     tool: Literal[
+        "leam_background_job",
+        "create_inbox_item",
+        "leam_inbox",
+        "leam_resources",
+        "leam_resource_save",
+        "leam_email",
+        "leam_email_draft",
         "leam_context",
         "leam_system",
         "leam_today",
@@ -70,6 +99,8 @@ class ToolCall(Input):
         "leam_operation_schema",
     ]
     arguments: dict = Field(default_factory=dict)
+    hostScope: HostScope | None = None
+    scopeProof: ScopeProof | None = None
 
 
 def service_token(directory):
@@ -100,12 +131,17 @@ def service_token(directory):
 
 
 class DomainTools:
-    def __init__(self, proposals, directory, inspector=None):
+    def __init__(self, proposals, directory, inspector=None, *, mail_reader=None, scope_guard=None, jobs=None):
+        self.jobs = jobs
+        self.scope_guard = scope_guard
+        self.mail_reader = mail_reader
         self.inspector = inspector
         self.proposals = proposals
         self.store = proposals.store
         self.calendars = proposals.calendar_actions.calendars
         self.token = service_token(directory)
+        if scope_guard is not None and hmac.compare_digest(scope_guard.credential, self.token):
+            raise ValueError("Runtime scope credential must differ from the ordinary tool token")
         self.context_reader = ContextReader(self.store, self.calendars)
 
     def authorized(self, header):
@@ -115,7 +151,21 @@ class DomainTools:
         return self.context_reader.query(body)
 
     async def call(self, body):
+        origin = None
+        if body.hostScope is not None or body.scopeProof is not None:
+            if self.scope_guard is None or body.hostScope is None:
+                raise HTTPException(403, "Trusted runtime scope is not enabled")
+            origin = await self.scope_guard.origin(
+                body.tool, body.arguments, body.hostScope, body.scopeProof
+            )
         schema = {
+            "leam_background_job": JobTool,
+            "create_inbox_item": InboxCreate,
+            "leam_inbox": InboxQuery,
+            "leam_resources": ResourceQuery,
+            "leam_resource_save": ResourceSave,
+            "leam_email": MailTool,
+            "leam_email_draft": DraftQuery,
             "leam_context": ContextQuery,
             "leam_system": SystemQuery,
             "leam_today": TodayQuery,
@@ -136,6 +186,27 @@ class DomainTools:
                     for e in error.errors()
                 ],
             ) from None
+        if body.tool == "leam_background_job":
+            if self.jobs is None:
+                raise HTTPException(503, "Background work is unavailable")
+            return await self.jobs.tool(arguments)
+        if body.tool == "create_inbox_item":
+            return Inbox(self.store).create(arguments, origin="companion")
+        if body.tool == "leam_inbox":
+            inbox = Inbox(self.store)
+            return inbox.get(arguments.id) if arguments.id else inbox.list(arguments.before, arguments.limit)
+        if body.tool == "leam_resources":
+            return ResourceTools(self.store).read(arguments)
+        if body.tool == "leam_resource_save":
+            return ResourceTools(self.store).save(arguments)
+        if body.tool == "leam_email":
+            if self.mail_reader is None:
+                raise HTTPException(503, "Mailbox reading is unavailable")
+            return await self.mail_reader.call(arguments)
+        if body.tool == "leam_email_draft":
+            return EmailDrafts(self.store, self.calendars.accounts.vault).call(
+                arguments
+            )
         if body.tool == "leam_system":
             if self.inspector is None:
                 raise HTTPException(503, "System inspection is unavailable")
@@ -149,6 +220,13 @@ class DomainTools:
                 self.context(arguments), arguments.query, arguments.offset
             )
         if body.tool == "leam_today":
+            if arguments.view == "agenda":
+                return self.proposals.agenda.context_page(
+                    Selection(date=arguments.date, timezone=arguments.timezone),
+                    offset=arguments.offset,
+                    limit=arguments.limit,
+                    focus_only=arguments.focusOnly,
+                )
             data = self.proposals.commitments.today(arguments.date)
             items = data["items"]
             return {
@@ -197,14 +275,16 @@ class DomainTools:
                 "liveProviderState": False,
             }
         if body.tool == "leam_propose":
-            return await self.proposals.propose(arguments)
+            if origin is None:
+                return await self.proposals.propose(arguments, actor="companion")
+            return await self.proposals.propose(arguments, origin=origin, actor="companion")
         if body.tool == "leam_operation_schema":
             with self.store.connect() as db:
-                approval = memory_policy.decision(db, arguments.operation)
+                approval = memory_policy.decision(db, arguments.operation, origin=origin)
             return {
                 "operation": arguments.operation,
                 "inputSchema": INPUTS[arguments.operation].model_json_schema(),
-                "approval": "Automatic under user memory settings"
+                "approval": "Automatic under current user approval settings"
                 if approval["mode"] == "automatic"
                 else "Explicit browser approval required",
                 "approvalPolicy": approval,

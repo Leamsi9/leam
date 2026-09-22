@@ -1,0 +1,27 @@
+.artifact-viewer { margin: 0 auto; max-width: 62rem; padding: 1rem clamp(.75rem, 3vw, 2rem) 2rem; }
+.artifact-toolbar { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
+.artifact-toolbar a { display: inline-flex; align-items: center; gap: .4rem; min-height: 44px; }
+.artifact-toolbar > span { flex: 1; color: var(--sub); }
+.artifact-heading { padding: 1rem 0; }
+.artifact-heading h1 { font-size: clamp(1.4rem, 4vw, 2.2rem); margin: 0 0 .5rem; }
+.artifact-heading p { margin: 0; color: var(--sub); }
+.artifact-report { line-height: 1.65; overflow-wrap: anywhere; }
+.artifact-report pre { overflow-x: auto; max-width: 100%; }
+.artifact-report table { display: block; overflow-x: auto; max-width: 100%; }
+.artifact-report th, .artifact-report td { padding: .5rem; min-width: 6rem; }
+.artifact-interactive { max-width: none; }
+.artifact-interactive iframe { display: block; width: 100%; height: 78dvh; min-height: 20rem; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.artifact-metadata { margin-top: 1.5rem; overflow-wrap: anywhere; }
+.artifact-metadata summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.unpublished-link small { font-style: italic; }
+@media (max-height: 500px) and (orientation: landscape) {
+  .artifact-heading { padding: .5rem 0; }
+  .artifact-heading h1 { font-size: 1.2rem; }
+  .artifact-interactive iframe { height: 85dvh; }
+}
+.artifact-image { margin:0; text-align:center; }
+.artifact-image img { display:block; max-width:100%; max-height:75dvh; object-fit:contain; margin:auto; }
+.artifact-image figcaption { color:var(--sub); font-size:.85rem; margin-top:.75rem; overflow-wrap:anywhere; }
+.artifact-text { white-space:pre-wrap; overflow-wrap:anywhere; padding:1rem; border:1px solid var(--line); border-radius:12px; }
+.artifact-download-note { padding:1.5rem; background:var(--soft); border-radius:16px; }
+.resource-download { display:inline-flex; align-items:center; gap:.5rem; min-height:44px; }

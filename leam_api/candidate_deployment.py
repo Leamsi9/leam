@@ -20,6 +20,7 @@ ENVIRONMENT_KEYS = frozenset(
         "LEAM_CODING_WORKSPACE",
         "LEAM_RUNTIME_URL",
         "LEAM_RUNTIME_TOKEN_FILE",
+        "LEAM_RUNTIME_SCOPE_ENABLED",
         "LEAM_CODEX_IDE_INSTALLATION",
         "LEAM_CODEX_IDE_SOCKET",
         "LEAM_SHARED_CODEX_THREAD",
@@ -245,6 +246,8 @@ class CandidateDeployment:
             or value["environmentSha256"] != digest(environment)
         ):
             raise ValueError("Unsupported launch environment")
+        if environment.get("LEAM_RUNTIME_SCOPE_ENABLED", "0") not in {"0", "1"}:
+            raise ValueError("Invalid trusted runtime scope activation flag")
         shared = environment.get("LEAM_SHARED_CODEX_THREAD", "").strip()
         if shared:
             try:

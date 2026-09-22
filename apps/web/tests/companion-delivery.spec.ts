@@ -146,10 +146,10 @@ test("uncertain attachment dispatch keeps exact IDs for explicit retry", async (
   await page.getByLabel("Attach files",{exact:true}).setInputFiles({name:"evidence.txt",mimeType:"text/plain",buffer:Buffer.from("evidence")});
   await expect(page.getByRole("list",{name:"Attached files"})).toContainText("evidence.txt");
   await page.getByRole("button",{name:"Send to Leam",exact:true}).click();
-  await expect(page.getByText(/Message delivery is uncertain/)).toBeVisible();
+  await expect(page.getByRole("complementary", {name:"Message delivery recovery"})).toContainText("Receipt unavailable");
   await expect(page.getByRole("list",{name:"Attached files"})).toContainText("evidence.txt");
   await expect(page.getByRole("button",{name:"Remove evidence.txt"})).toBeDisabled();
-  await page.getByRole("button",{name:"Send to Leam",exact:true}).click();
+  await page.getByRole("button",{name:"Retry saved message",exact:true}).click();
   await expect.poll(()=>writes.length).toBe(2);
   expect(writes[1]).toEqual(writes[0]);
 });

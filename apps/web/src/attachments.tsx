@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Paperclip, X } from "lucide-react";
 import { api } from "./api";
+import { refreshResourceUnread } from "./resource-unread";
 import {
   rememberSession,
   sessionGeneration,
@@ -16,8 +17,6 @@ export type Attachment = {
   sha256: string;
   state: string;
 };
-const accept =
-  ".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.csv,.json,image/png,image/jpeg,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json";
 const guess: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -28,7 +27,14 @@ const guess: Record<string, string> = {
   md: "text/markdown",
   csv: "text/csv",
   json: "application/json",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
+const accept = [
+  ...Object.keys(guess).map((extension) => "." + extension),
+  ...new Set(Object.values(guess)),
+].join(",");
 export function useAttachmentDraft(key: string) {
   const storage = "attachments:" + key;
   const [items, setItems] = useState<Attachment[]>(() =>
@@ -52,11 +58,13 @@ export function useAttachmentDraft(key: string) {
   return { items, change, clear, ids: items.map((a) => a.id) };
 }
 export function AttachmentComposer({
+  compact = false,
   items,
   onChange,
   disabled = false,
   onBusyChange,
 }: {
+  compact?: boolean;
   items: Attachment[];
   onChange: (rows: Attachment[]) => void;
   disabled?: boolean;
@@ -98,8 +106,10 @@ export function AttachmentComposer({
           throw new Error(
             "Choose up to 10 files with a combined size of 10 MiB.",
           );
-        const mime =
-          guess[file.name.split(".").at(-1)?.toLowerCase() || ""] || file.type;
+        const browserMime = file.type.split(";", 1)[0].toLowerCase();
+        const mime = Object.values(guess).includes(browserMime)
+          ? browserMime
+          : guess[file.name.split(".").at(-1)?.toLowerCase() || ""] || file.type;
         const response = await fetch(
           "/api/attachments?filename=" + encodeURIComponent(file.name),
           {
@@ -135,6 +145,7 @@ export function AttachmentComposer({
       if (alive.current)
         setError(e instanceof Error ? e.message : "Attachment upload failed");
     } finally {
+      void refreshResourceUnread();
       clearTimeout(timer);
       busyRef.current = false;
       if (alive.current) {
@@ -149,6 +160,7 @@ export function AttachmentComposer({
       style={{ display: "block", gridColumn: "1 / -1", minWidth: 0 }}
     >
       <label
+        title={busy ? "Uploading files" : "Attach files"}
         className="secondary"
         style={{
           display: "inline-flex",
@@ -160,7 +172,7 @@ export function AttachmentComposer({
         }}
       >
         <Paperclip size={18} aria-hidden="true" />
-        {busy ? "Uploading…" : "Attach files"}
+        {busy ? "Uploading…" : !compact && "Attach files"}
         <input
           aria-label="Attach files"
           type="file"
@@ -222,6 +234,7 @@ export function AttachmentComposer({
                       undefined,
                       request.signal,
                     );
+                    void refreshResourceUnread();
                     if (
                       alive.current &&
                       !request.signal.aborted &&
@@ -269,18 +282,24 @@ export function AttachmentList({ items }: { items: Attachment[] }) {
       aria-label="Message attachments"
       style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
     >
-      {items.map((a) => (
-        <a key={a.id} href={"/api/attachments/" + a.id} download={a.filename}>
-          {a.mimeType.startsWith("image/") && (
-            <img
-              src={"/api/attachments/" + a.id}
-              alt={a.filename}
-              style={{ maxWidth: 120, maxHeight: 120, display: "block" }}
-            />
-          )}
-          {a.filename}
-        </a>
-      ))}
+      {items.map((a) =>
+        a.state === "deleted" ? (
+          <span key={a.id} className="attachment-deleted">
+            {a.filename} · Attachment deleted
+          </span>
+        ) : (
+          <a key={a.id} href={"/api/attachments/" + a.id} download={a.filename}>
+            {a.mimeType.startsWith("image/") && (
+              <img
+                src={"/api/attachments/" + a.id}
+                alt={a.filename}
+                style={{ maxWidth: 120, maxHeight: 120, display: "block" }}
+              />
+            )}
+            {a.filename}
+          </a>
+        ),
+      )}
     </div>
   ) : null;
 }

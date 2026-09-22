@@ -1,16 +1,22 @@
 import { expect, type Page } from "@playwright/test";
 export async function navigate(page: Page, label: string) {
-  await page.getByRole("navigation", { name: "Main navigation" }).waitFor();
-  const target = page.getByRole("button", {
-    name: new RegExp("^" + label + "(?: |$)"),
+  const navigation = page.getByRole("navigation", { name: "Main navigation" });
+  await navigation.waitFor();
+  const name = new RegExp("^" + label + "(?: |$)");
+  let target = navigation.getByRole("button", {
+    name,
   });
-  if (!(await target.isVisible()))
-    await page.getByRole("button", { name: /^More/ }).click();
+  if (!(await target.isVisible())) {
+    await navigation.getByRole("button", { name: /^More/ }).click();
+    target = page
+      .getByRole("dialog", { name: "More from Leam" })
+      .getByRole("button", { name });
+  }
   await target.click();
 }
 export async function settingsSection(page: Page, title: string) {
   const section = page.locator(".settings-section").filter({
-    has: page.locator("summary", { hasText: new RegExp("^" + title + "$") }),
+    has: page.locator(":scope > summary", { hasText: new RegExp("^" + title + "$") }),
   });
   if (!(await section.getAttribute("open"))) {
     if (await section.evaluate((el) => !(el as HTMLDetailsElement).open))

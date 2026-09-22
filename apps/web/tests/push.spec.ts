@@ -93,6 +93,8 @@ test("service worker displays a push event and uses a stable tag", async ({
         return notifications.map((n) => ({
           title: n.title,
           body: n.body,
+          icon: n.icon,
+          badge: n.badge,
           url: n.data.url,
         }));
       }),
@@ -101,9 +103,22 @@ test("service worker displays a push event and uses a stable tag", async ({
       {
         title: "Leam",
         body: "A synthetic notification for worker testing",
+        icon: origin + "/leam-icon-192.png",
+        badge: origin + "/leam-notification-badge.svg",
         url: "/?view=today",
       },
     ]);
+  const brandedAssets = await page.evaluate(async () => {
+    const urls = ["/leam-icon-192.png", "/leam-notification-badge.svg"];
+    return Promise.all(urls.map(async url => {
+      const image = new Image(); image.src = url; await image.decode();
+      return { url, width: image.naturalWidth, height: image.naturalHeight };
+    }));
+  });
+  expect(brandedAssets).toEqual([
+    { url: "/leam-icon-192.png", width: 192, height: 192 },
+    { url: "/leam-notification-badge.svg", width: 96, height: 96 },
+  ]);
   await page.evaluate(async () => {
     for (const n of await (
       await navigator.serviceWorker.ready

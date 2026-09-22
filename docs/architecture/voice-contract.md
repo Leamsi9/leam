@@ -1,6 +1,10 @@
 # Leam voice architecture — implementation handoff
 
-This contract records the architecture and successive voice increments. Later sections describe the current shared composer, device preferences and app-wide streamed playback. Earlier design stages are not separate claims of deployed behavior. Actual device/provider acceptance remains installation-specific; see the test coverage guide.
+Implementation status: the compact dictation/read-aloud and foreground conversation slice is source-verified; deployment/device QA and UAT remain pending. See [voice implementation evidence](../plans/feature/leam-voice-conversation.md) for exact delivered behavior and limits. The design below remains the longer-term contract; unimplemented capabilities are not implied by this status.
+
+Original design provenance (2026-09-20): No application implementation, credentials, services, or repository files changed by this design task. `protocol_adopted: non_mutating`; proposal capture is the design-only branch of the substantive workflow. Parent owns integration and promotion into `docs/architecture/voice-contract.md` plus the active build plan.
+
+Inspected Leam branch `feature/leam-build-2026-09-20`, commit `88fb0a4553cec3cb49ac2bf32a95b19c70593c30`, clean at inspection, in `/home/user/Github/.worktrees/leam-build-2026-09-20`. Read repository AGENTS, product/companion contracts, active build plan, substantive/delegated/proposal protocols and candidate-delivery overlay. Runtime contract was inspected read-only in `/home/user/Github/.worktrees/leam-runtime-build-2026-09-20`; its knowledge graph was absent, so targeted source reads were used. Browser facts below were checked against primary sources; browser/device behavioral acceptance remains outstanding.
 
 ## Decision
 
@@ -178,7 +182,7 @@ Initial controls: input language (default `navigator.language`, editable), outpu
 
 For the first slice, language/voice/rate can be session-local. Later persist account-level preferences through Leam's versioned settings; voice identity is a per-device preference because voices differ between devices. Persist no audio or provisional transcript. Submitted text already enters durable transcript/request receipts, and existing sessionStorage holds unresolved submission text; logout must clear those private pending values just as it clears typed submissions.
 
-Local-only is a hard constraint if offered: detect `processLocally`, check selected-language availability, obtain an explicit action before downloading a language pack, and return an unavailable state when unsupported. A permissive browser-managed fallback must be an explicit preference change, never automatic. Local STT/TTS also does not make the selected companion LLM local.
+Local-only is a hard constraint if offered: detect `processLocally`, check selected-language availability, obtain an explicit action before downloading a language pack, and return an unavailable state when unsupported. A permissive browser-managed fallback requires explicit user authorization. For Leam-host Pocket output, that authorization permits one visible, playback-session-scoped recovery to the device/browser voice when Pocket fails; the current bounded phrase can restart to avoid skipped words, subsequent phrases stay on the browser adapter, and the saved Pocket selection does not change. This recovery may send reply text to an online OS/browser speech service, but never sends microphone audio or retries a conversational submission. Local STT/TTS also does not make the selected companion LLM local.
 
 ## Lifecycle, accessibility and recovery
 
@@ -235,7 +239,7 @@ dictation as editable text; Cancel explicitly discards it.
 
 ## Shared chat integration
 
-VoiceComposer now accepts module-neutral replies, terminal runs and a durable submit callback. Companion and Coding both integrate it; future chat surfaces should use this default. Dictation remains independent of transport readiness. See universal chat voice (private development record; not public release acceptance) for correlation, shared-session follow-up limits and verification.
+VoiceComposer now accepts module-neutral replies, terminal runs and a durable submit callback. Companion and Coding both integrate it; future chat surfaces should use this default. Dictation remains independent of transport readiness. See [universal chat voice](../plans/feature/leam-universal-chat-voice.md) for correlation, shared-session follow-up limits and verification.
 
 ## Device output preferences
 
@@ -243,7 +247,7 @@ VoiceSettings in main Settings configures browser/OS voice and 0.5–2× speed f
 browserOutput consumers, including Companion, Coding and ticket chat. Preferences
 are per browser/device and apply to the next playback. Missing voices use the existing
 language/device fallback; asynchronous inventory changes update the selector. See
-voice settings slice (private development record; not public release acceptance) for persistence and
+[voice settings slice](../plans/feature/leam-voice-settings.md) for persistence and
 caller evidence. This does not enable simultaneous listening during playback.
 
 Conversation readout offers Speak now: cancel audio first, fence its callbacks, then
@@ -265,7 +269,7 @@ across Companion, Coding and ticket chat; changing tabs does not resume the micr
 The separate 10-second no-input limit remains active while listening, with recognized
 speech finalization taking precedence at an equal deadline. Provider limitations,
 exact-run playback, uncertain-delivery protection and Speak now remain unchanged.
-See direct-controls evidence (private development record; not public release acceptance).
+See [direct-controls evidence](../plans/feature/direct-voice-controls.md).
 
 ## Streamed playback and navigation (2026-09-21)
 
@@ -291,12 +295,33 @@ continues. A new speech owner, Stop, logout or page exit cancels the active outp
 and subscription. Hiding the browser page pauses speech; background/device continuity
 is not promised.
 
-The app-wide popup has Pause/Resume, Stop and elapsed speaking time, excluding pauses
+The app-wide popup has Speak, Replay last output, Pause/Resume, Stop and elapsed speaking time, excluding pauses
 and buffering. It labels a growing reply Live and completed text Duration unavailable;
 it does not estimate a total audio duration. Browser output preferences still apply.
+Speak resolves the exact module/thread to a mounted shared composer, cancels output
+before capturing, and uses normal conversation guards, input preferences and the
+10-second silence limit. Existing drafts are preserved and never implicitly sent.
+If that chat is no longer mounted, the action explicitly returns to the original
+Companion/Coding thread with playback paused and microphone off. A second Speak click
+is required. Returning a Coding thread resolves its native/shared transport metadata;
+item-chat playback returns to its same underlying canonical thread. No microphone
+ownership is created merely by mounting or navigating, and stale composer cleanup
+cannot unregister another chat's control.
+The separate loudspeaker Replay action retains the last exact module/thread/run/message
+target after playback interruption or completion. Clicking it stops capture and rereads
+the current matching transcript from the beginning through the scoped read-only follower.
+Replay never creates a model turn or rearms the microphone. Only target metadata is
+kept in memory; no audio/transcript is saved for replay. Logout and page exit clear it,
+and no reload or navigation automatically replays speech.
+
+Shared IDE-owner Coding conversation capture is available during an active turn, matching typed follow-up
+support. Native active turns retain their existing guard. The normal submission receipt distinguishes a new turn from steering an existing
+one. An accepted steer clears the spoken draft and visibly pauses conversation without
+reading unrelated existing output. Active-turn state still blocks automatic microphone
+rearm after a newly requested reply; it no longer disables explicit speech capture.
 A Markdown parser supplies text without depending on a mounted transcript element,
 preserving literal punctuation and code. Code/table summarisation remains deferred.
-See implementation evidence (private development record; not public release acceptance). Mock browser
+See [implementation evidence](../plans/feature/streaming-playback.md). Mock browser
 checks establish controller behavior; real-device microphone/synthesis acceptance
 remains separate.
 
@@ -305,3 +330,204 @@ of conversation mode. Explicitly starting conversation mode stops any previous
 owner before switching; late replies from that old owner cannot speak or rearm.
 Dictation and typed submission stop the actual active owner, independently of
 which panel mounted most recently. Expected-owner cleanup cannot stop a newer chat.
+
+## Five-minute active listening
+
+The shared Ear toggle explicitly activates foreground listening for at most five
+minutes, including response waits and output. Its original deadline never extends
+on speech, replies or recognizer restarts. An always-visible microphone state and
+countdown distinguish listening from microphone-off waits. Explicit Off, logout,
+hidden/page exit and target change stop capture. Ordinary Conversation retains its
+ten-second no-input limit. Selected input settings and normal final-utterance sending
+remain in force; silence and partial text do not create model requests. At expiry,
+unsent recognized text is recovered to a draft without auto-sending. A server turn
+already accepted before expiry is not cancelled or submitted again.
+
+Output remains half-duplex: capture is stopped while replies are read, then may
+resume only through the existing completion/ownership guards before the original
+deadline. No full-duplex acoustic interruption or background phone operation is
+promised. Local adapters expose a capture bound; Moonshine streams finish/recycle at
+60 seconds when silent, below the existing 90-second worker admission cap. A known
+in-progress utterance may finalize normally; if it continues to75 seconds, recognized
+words are recovered to an unsent draft and Ear stops visibly rather than chopping the
+utterance. Brief microphone restarts are indicated and retain any finalized segments
+under the same five-minute deadline. Existing review-required receipt/error/partial
+speech guards can end the mode earlier; five minutes is a maximum, not a bypass.
+
+Idle compute is not free. Source-derived local transport rate is two 8,000-sample
+Float32 blocks per second (16kHz): five minutes is about600 audio requests,19.2MB raw
+or25.6MB base64 before headers and capture lifecycle calls. The worker performs
+recognition updates even on silent chunks. This is a transport bound, not a CPU
+benchmark or acoustic-noise guarantee. Silence invokes no conversation LLM; actual
+finalized utterances use the normal selected model. Moonshine stays on the existing
+local host, while browser recognition may use a remote service. Input selection is
+never silently changed, and no unvalidated amplitude threshold discards quiet speech.
+
+## Optional local speech boundary
+
+`local_voice.py` proxies the owner session to an optional token-protected loopback
+worker. `voice_protocol.py` defines bounded English PCM capture and stock-voice TTS;
+`voice_worker.py` owns one native inference at a time and no conversational model.
+The app revalidates session ownership after recognition and during streamed output.
+The worker never accepts caller model/file/URL choices or browser Origins. PCM is
+validated before native admission; validation and native errors do not echo audio.
+Capture IDs, ordered chunks and private session-derived owner identities prevent
+cross-session continuation. Completed IDs are bounded in-memory tombstones.
+
+No raw audio or spoken text is retained by the adapter. Explicit setup downloads
+only official selected models into private operator storage, with attribution and
+version/checksum manifest. No setup action starts or exposes the worker. See
+`scripts/voice/README.md` for operator startup and limits. Two-CPU affinity is a
+resource allocation, not a native inference timeout. Cancelling output drops late
+PCM; the pinned Pocket generator must finish its bounded phrase before another
+native inference is admitted. A stuck native call needs supervised worker restart.
+Browser defaults and current main-model/approval selection remain unchanged.
+
+
+Settings chooses recognition and playback independently, with browser defaults.
+`voice/engines.ts` constructs the selected adapters for existing shared controls;
+no chat owns a separate speech implementation. Local preferences remain on the
+browser and are not main-model settings. Browser recognition may be paired with
+Pocket playback. Settings displays the bounded voice inventory reported by the
+selected adapter and stores Pocket and browser voice identities independently.
+Unavailable Moonshine never uploads local audio to a different provider. Pocket
+stream failure visibly retries the current bounded phrase once through the
+browser voice when that adapter is available, without changing the saved engine;
+browser failure remains terminal and no path retries a conversational send.
+
+Moonshine uses a same-origin, integrity-cached AudioWorklet to downsample mono
+microphone PCM into ordered half-second chunks. Tracks stop immediately on cancel;
+subsequent local operations wait for that capture's scoped worker release. Existing
+conversation pause/finalization rules use transcript changes, not acoustic VAD.
+Pocket uses a gesture-unlocked AudioContext and bounded queued PCM. Stop drops all
+queued sources and fences late chunks by playback generation and auth generation.
+The controller's existing exact thread/run/message ownership and app-navigation
+playback lifetime remain authoritative. Capture stops before playback; natural
+completion can rearm only the still-mounted original conversation. No duplex or
+acoustic echo cancellation guarantee is added. Long streaming sentences are split
+into at most 240-character phrases for either output adapter.
+
+Explicit stream ownership closes both acquired HTTP streams and worker producers
+even if response iteration never begins. Cancellation waits for actual native
+thread completion before releasing model ownership, including asyncio shutdown.
+These resource guarantees do not impose a hard deadline on native inference.
+
+
+## Independent output profiles and transport framing
+
+Voice Settings provides a Configure provider selector independent of the playback
+engine. Browser and Pocket each retain their own voice and 0.5–2x speed; browser
+settings also apply to Pocket fallback. Existing shared speeds migrate to both
+profiles, preserving prior preferences until edited. Provider preview does not
+change the selected engine. Browser voice inventory refreshes on voiceschanged,
+window focus, visibility return and explicit Refresh voices; an empty browser/OS
+inventory is reported rather than inventing voices.
+
+Pocket advertises only installed, hash-verified English stock embeddings from a
+fixed upstream catalog. Additional choices do not load multiple model instances;
+voice state switches within the existing serialized worker. No cloning or arbitrary
+path/URL inputs are enabled. See scripts/voice/README.md for source and licenses.
+
+Client streaming bounds each NDJSON frame and its incomplete remainder separately
+from arbitrary fetch chunks; multiple valid frames in one read are accepted within
+the unchanged overall response cap. The local 90-second playback watchdog excludes
+explicit pauses, with its remaining allowance restored on resume. Worker generation
+and proxy transport limits remain independently enforced. These corrections do not
+promise uninterrupted playback when Android suspends the browser or the network fails.
+
+Playback's Dismiss (X) stops audio and clears the retained replay panel. The
+message's read-aloud action remains available. Companion response cancellation
+lives beside the composer and targets the exact running response, independently
+of whether saved history suppresses the duplicate live bubble. A cancellation
+request remains pending until its receipt; failures stay visible and retries reuse
+the same action identity. Stopping a run does not undo completed tool actions.
+
+
+## Coding playback follow-through (2026-09-21)
+
+Coding message speaker controls sit below assistant prose. Replay last reply is
+also available in the existing composer voice row before any previous readout;
+it uses the latest displayed assistant's exact thread/run/message target.
+Manual replay is explicit and stops microphone conversation mode.
+
+For an explicit spoken follow-up to a known active shared Codex run, conversation
+mode can now read only new answer text after its pre-dispatch baseline. The
+receipt carries an in-memory baseline of assistant IDs/text for that exact active
+run; the existing playback follower and direct updates apply the same prefix
+filter. Existing text and delayed shorter snapshots are silent, new IDs/appended
+answer text may play, and a non-prefix rewrite stops safely. A missing baseline or
+already-reconciled historical submission remains paused. This is readout of new
+output in the shared run, not a claim of a new model turn. Existing new-turn
+receipt correlation, final-answer selection, mode-off stops, and active-run
+microphone rearm guards remain. Navigation stops capture and automatic rearming;
+app-owned output continues following only the original exact source and baseline. Baselines are not written to browser
+storage or sent to speech providers; only the new selected text is spoken.
+They clear with the authenticated in-memory playback target on dismissal/logout.
+Source/build status only until root deploy/notify and caller QA; device UAT pending.
+
+
+The shared composer voice row includes Replay last reply for the current chat's
+latest available assistant response, even before any prior playback. Companion,
+Today, Goals and ticket chats inherit this control. Coding retains its existing
+explicit manual latest-output selection. Exact module/thread/run/message targeting,
+manual playback capture cancellation, preserved drafts and existing output settings
+apply; replay never sends a chat message. No reply means no replay control.
+
+## Background Pocket media playback
+
+Pocket validates and buffers each bounded read-aloud phrase before playing its
+24 kHz mono PCM as real WAV audio through one app-owned HTML audio element.
+This increases start latency per short phrase compared with sample streaming;
+voice/rate settings, NDJSON sequence/frame/7 MB response limits, auth fences and
+pause-aware 90-second watchdog remain. Audio stays in memory; Blob URLs are
+revoked on completion, replacement, stop, dismissal, page exit and auth loss.
+No silent unlock media or persisted audio is used. Normal app CSP permits local
+blob media only; isolated artifact/download policies are independent.
+
+Tab hiding does not explicitly pause playback. Microphone capture and automatic
+conversation rearming still stop on visibility loss. Closing/leaving the page
+and losing authentication still clear output. Media Session exposes supported
+play/pause/stop actions for Pocket, using generic Leam/Codex read-aloud metadata;
+no reply text, conversation titles, IDs, or invented whole-reply duration/seek
+range. Controls target the current app-owned playback. A permission-blocked
+HTML play request retains the phrase paused for explicit Resume without another
+synthesis request. Other Pocket failures retain the existing device-voice fallback
+and clear Pocket's media session. Device/browser TTS and background execution are
+best effort; no OS notification or process-survival guarantee. Short clips may
+not meet Android's media-notification duration threshold. Real Android lock-screen
+and headset UAT is separate from mocked caller QA.
+
+## Pocket phrase lookahead and continuous browser conversation
+
+The app-owned playback queue may prepare one unsaid Pocket phrase while the
+current phrase is playing. Preparation only performs bounded local synthesis;
+it does not acquire the shared media element, play audio, or open a microphone.
+Stop/replacement/auth revocation cancels the lookahead; pause prevents promotion.
+A changed unsaid text prefix invalidates preparation, and browser fallback drops
+it. Existing autoplay permission checks and per-provider voice/rate selection
+remain in effect. This hides synthesis latency when it finishes before current
+playback, but is not a guarantee of gapless output or mobile background execution.
+
+Conversation mode requests continuous browser recognition to reduce unnecessary
+native start/end cycles. Dictation remains single-utterance. Silence/deadline and
+bounded restart policies still belong to the conversation controller; native
+recognition may end despite the continuous request. Leam does not manufacture
+microphone pings and cannot promise to disable device-controlled sounds.
+
+## Android provisional-result compatibility (2026-09-22)
+
+The shared browser input uses single-utterance native captures on Android, even
+when the conversation controller requests continuous listening. Chromium's
+[Android recognition bridge](https://raw.githubusercontent.com/chromium/chromium/main/content/public/android/java/src/org/chromium/content/browser/SpeechRecognitionImpl.java)
+converts provisional results to final in continuous mode (`handleResults`), which
+can commit each growing hypothesis as another phrase. The existing controller
+restarts completed captures under its original silence/expiry limits. Desktop
+continuous capture and Moonshine are unchanged. Transcript snapshots replace
+previous previews; intentional repetitions within and between captures remain.
+This matches the reported Android symptom; the particular phone's selected
+provider/event sequence has not been observed, so device UAT remains required.
+
+Scope: Leam candidate | Base: minor | Override: candidate-delivery | Order:
+build → deploy → notify → QA → user UAT. Narrow shared-adapter correction only;
+caller fixtures cover Android dictation/conversation/active listening, repeated
+words and desktop multi-result capture. Root owns deployment and backlog updates.

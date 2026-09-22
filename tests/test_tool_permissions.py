@@ -214,7 +214,19 @@ async def test_profile_backup_precedes_mutation_and_exact_effective_settings_res
     applied = await permissions.apply_profile(backup, "http://127.0.0.1:46410")
     assert applied["configurationMatched"] and not global_setting
     assert overrides["builtin.shell"] == "disabled"
-    assert all(overrides[name] == "always_allow" for name in ALLOWED)
+    # Explicitly requested private Resource saves must survive profile reapplication.
+    assert overrides["mcp-leam.leam_resource_save"] == "always_allow"
+    assert (
+        "POST",
+        "/api/webchat/v2/settings/tools/mcp-leam.leam_resource_save",
+        {"state": "always_allow"},
+    ) in calls
+    # Do not broaden a different write permission or enable global auto-approval.
+    assert overrides["mcp-leam.create_inbox_item"] == "ask_each_time"
+    assert all(
+        overrides[name] == "always_allow"
+        for name in ALLOWED - {"mcp-leam.create_inbox_item"}
+    )
     assert (await permissions.restore_profile(backup, "http://127.0.0.1:46410"))[
         "restored"
     ]

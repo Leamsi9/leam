@@ -55,7 +55,14 @@ test("UAT completion moves below active updates and regression brings it back", 
     .getByRole("article", { name: "Failed QA feature" })
     .locator('[aria-current="step"]');
   await expect(qaStage).toHaveText("QA");
-  await expect(qaStage).toHaveCSS("background-color", "rgb(127, 29, 29)");
+  await expect(qaStage.locator(".semantic-badge")).toHaveAttribute(
+    "data-tone",
+    "danger",
+  );
+  await expect(qaStage.locator(".semantic-badge")).toHaveCSS(
+    "background-color",
+    "rgb(250, 227, 223)",
+  );
   await expect(
     page
       .getByRole("article", { name: "Ready feature", exact: true })
@@ -160,7 +167,17 @@ test("unread menu and ticket highlights clear only on explicit read and return f
     page.getByRole("article", { name: "Obsolete deployment" }),
   ).toHaveCount(0);
   expect(seenCalls).toBe(0);
-  await card.getByRole("button", { name: "Mark as read", exact: true }).click();
+  const read = card.getByRole("button", { name: "Mark as read", exact: true });
+  const footer = card.locator(":scope > footer");
+  await expect(footer.getByRole("button", { name: "Mark as read", exact: true })).toHaveCount(1);
+  await read.scrollIntoViewIfNeeded();
+  const buttonRect = (await read.boundingBox())!;
+  const chatRect = (await card.locator("summary").filter({ hasText: "Chat about this update" }).boundingBox())!;
+  expect(buttonRect.y).toBeGreaterThanOrEqual(chatRect.y + chatRect.height);
+  expect(buttonRect.x).toBeGreaterThanOrEqual(0);
+  expect(buttonRect.x + buttonRect.width).toBeLessThanOrEqual(390);
+  expect(buttonRect.height).toBeGreaterThanOrEqual(44);
+  await read.click();
   await expect(card).toHaveAttribute("data-unread", "false");
   await expect(menu.getByRole("status")).toHaveCount(0);
   await page.reload();
@@ -176,9 +193,8 @@ test("unread menu and ticket highlights clear only on explicit read and return f
   };
   await page.getByRole("button", { name: "Refresh updates" }).click();
   await expect(card).toHaveAttribute("data-unread", "true");
-  await expect(card.locator('[aria-current="step"]')).toHaveCSS(
-    "background-color",
-    "rgb(127, 29, 29)",
-  );
+  const failedBadge = card.locator('[aria-current="step"] .semantic-badge');
+  await expect(failedBadge).toHaveAttribute("data-tone", "danger");
+  await expect(failedBadge).toHaveCSS("background-color", "rgb(250, 227, 223)");
   expect(seenCalls).toBe(1);
 });

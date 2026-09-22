@@ -1,0 +1,186 @@
+.backlog-panel {
+  min-width: 0;
+}
+.backlog-panel p,
+.backlog-panel li,
+.backlog-panel h3,
+.backlog-panel dd {
+  overflow-wrap: anywhere;
+}
+.backlog-controls,
+.backlog-controls [role="group"],
+.backlog-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.backlog-controls {
+  margin-block: 1rem;
+}
+.backlog-controls button {
+  min-height: 44px;
+}
+.backlog-controls button[aria-pressed="true"] {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.backlog-list {
+  display: grid;
+  gap: 0.75rem;
+}
+.backlog-card {
+  min-width: 0;
+  margin-block: 0.75rem;
+}
+.backlog-card h3 {
+  margin-top: 0;
+}
+.backlog-card p {
+  white-space: pre-wrap;
+}
+.backlog-card summary {
+  padding-block: 0.75rem;
+  cursor: pointer;
+}
+.backlog-assignment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
+.backlog-assignment div {
+  min-width: 0;
+}
+.backlog-assignment dt {
+  font-weight: 600;
+}
+.backlog-assignment dd {
+  margin: 0;
+}
+.backlog-subtasks {
+  padding-inline-start: 1.25rem;
+}
+.backlog-subtasks li {
+  margin-block: 0.75rem;
+}
+.backlog-kanban {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+.backlog-lane {
+  min-width: 0;
+  border: 1px solid var(--semantic-neutral-line);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+.backlog-lane > h3 {
+  margin-top: 0;
+}
+/* Compact resting cards; the expanded body retains all assessment evidence. */
+.backlog-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+}
+.backlog-heading h2,
+.backlog-heading .backlog-controls {
+  margin-block: 0.25rem;
+}
+.backlog-heading .backlog-controls {
+  gap: 0.25rem;
+}
+.backlog-heading .backlog-controls [role="group"] {
+  gap: 0.25rem;
+}
+.backlog-about {
+  margin-block: 0.25rem 0.5rem;
+}
+.backlog-about > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.backlog-list {
+  gap: 0.35rem;
+}
+.backlog-card {
+  position: relative;
+  margin-block: 0.35rem;
+  padding: 0.5rem;
+}
+.backlog-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+.backlog-card summary {
+  min-height: 52px;
+  padding: 0 0 0 44px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25rem;
+}
+.backlog-card summary::-webkit-details-marker {
+  display: none;
+}
+.backlog-card summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.backlog-card details:not([open]) h3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.backlog-cues {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+}
+.backlog-cues .semantic-badge {
+  font-size: 0.72rem;
+  padding-block: 0.1rem;
+}
+.backlog-drag {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.4rem;
+  min-width: 44px;
+  min-height: 44px;
+  touch-action: none;
+  cursor: grab;
+}
+.backlog-drag:active {
+  cursor: grabbing;
+}
+.backlog-drop-target {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+.backlog-move {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-block: 0.75rem;
+}
+.backlog-move button {
+  min-height: 44px;
+}
+.backlog-lane {
+  padding: 0.5rem;
+}
+
+.backlog-triage { padding: .65rem 0; border-bottom: 1px solid var(--line); margin-bottom: .7rem; }
+.backlog-triage details { margin-top: .4rem; }
+.backlog-triage textarea { display: block; box-sizing: border-box; width: 100%; max-width: 36rem; }

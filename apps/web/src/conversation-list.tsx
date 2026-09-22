@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Trash2, X, Check } from "lucide-react";
 import { api, type Data } from "./api";
 
@@ -13,6 +13,7 @@ export function ConversationList({
   onSelect,
   onChanged,
   onOpen,
+  catalogStatus,
 }: {
   kind: "companion" | "coding";
   items: Data[];
@@ -24,7 +25,9 @@ export function ConversationList({
   onSelect: (item: Data) => void;
   onChanged: (id: string, value: Data | null) => void;
   onOpen?: () => void;
+  catalogStatus?: ReactNode;
 }) {
+  const [scope, setScope] = useState("all");
   const [open, setOpen] = useState(!selected),
     [editing, setEditing] = useState("");
   const [title, setTitle] = useState(""),
@@ -104,6 +107,18 @@ export function ConversationList({
       if (mounted.current) setBusy(false);
     }
   }
+  // A resumed session retains its native ID. Equal titles are not identity.
+  const unique = [...new Map(items.map((item) => [idOf(item), item])).values()];
+  const visible =
+    kind === "coding" && scope === "leam"
+      ? unique.filter(
+          (item) =>
+            item.leamPurpose ||
+            item.transport === "ide-owner" ||
+            item.originator === "leam" ||
+            item.leamOrigin === "reviewed-companion-handoff",
+        )
+      : unique;
   const chosen =
     items.find((item) => idOf(item) === selected) ||
     (selectedItem && idOf(selectedItem) === selected ? selectedItem : null);
@@ -138,15 +153,46 @@ export function ConversationList({
           tabIndex={0}
           aria-label="Scrollable conversation list"
         >
-          {!items.length && (
+          {catalogStatus}
+          {kind === "coding" && (
+            <label>
+              Session catalog
+              <select
+                aria-label="Session catalog"
+                value={scope}
+                onChange={(event) => setScope(event.target.value)}
+              >
+                <option value="all">All Codex sessions</option>
+                <option value="leam">Leam sessions</option>
+              </select>
+              {scope === "leam" && (
+                <small>
+                  Shows sessions explicitly linked to or created by Leam among
+                  the loaded pages. Other Codex sessions remain in All Codex
+                  sessions.
+                </small>
+              )}
+            </label>
+          )}
+          {!visible.length && (
             <p role="status">
-              {loading ? "Loading conversations…" : "No conversations yet."}
+              {loading
+                ? "Loading conversations…"
+                : scope === "leam" && kind === "coding"
+                  ? "No Leam sessions in the loaded pages."
+                  : "No conversations yet."}
             </p>
           )}
-          {items.map((item) => {
+          {visible.map((item) => {
             const id = idOf(item),
               name = titleOf(item),
-              protectedThread = item.transport === "ide-owner";
+              sharedThread = item.transport === "ide-owner",
+              protectedThread =
+                sharedThread || item.leamDeleteProtected === true,
+              protectionReason = String(
+                item.leamDeleteReason ||
+                  "The shared coding owner is protected from deletion.",
+              );
             return (
               <div
                 className={`conversation-row ${id === selected ? "current" : ""}`}
@@ -203,9 +249,9 @@ export function ConversationList({
                       type="button"
                       className="conversation-title"
                       aria-label={`Rename ${name}`}
-                      disabled={protectedThread || busy}
+                      disabled={sharedThread || busy}
                       title={
-                        protectedThread
+                        sharedThread
                           ? "Manage the shared build title in Codex"
                           : "Rename conversation"
                       }
@@ -227,6 +273,14 @@ export function ConversationList({
                           </small>
                         )}
                       <small>{formatDate(item)}</small>
+                      {kind === "coding" && (
+                        <small>
+                          {purposeLabel(item)} · ID {id.slice(-8)}
+                        </small>
+                      )}
+                      {kind === "coding" && protectedThread && (
+                        <small>{protectionReason}</small>
+                      )}
                     </button>
                     <button
                       type="button"
@@ -247,7 +301,7 @@ export function ConversationList({
                       disabled={busy || protectedThread}
                       title={
                         protectedThread
-                          ? "The shared build is protected from deletion"
+                          ? protectionReason
                           : "Delete conversation"
                       }
                       onClick={() => {
@@ -333,10 +387,30 @@ export function ConversationList({
 function formatDate(item: Data) {
   const raw =
     item.created_at ??
-    (typeof item.createdAt === "number" ? item.createdAt * 1000 : null);
+    (typeof (item.recencyAt ?? item.updatedAt ?? item.createdAt) === "number"
+      ? (item.recencyAt ?? item.updatedAt ?? item.createdAt) * 1000
+      : null);
   if (raw == null) return "Date unavailable";
   const date = new Date(raw);
   return Number.isNaN(date.getTime())
     ? "Date unavailable"
     : date.toLocaleString();
+}
+
+function purposeLabel(item: Data) {
+  if (item.leamMain) return "Main · coordinator";
+  if (item.transport === "ide-owner") return "Shared owner";
+  if (item.leamPurpose === "update") return "Updates ticket";
+  if (
+    item.leamPurpose === "handoff" ||
+    item.leamOrigin === "reviewed-companion-handoff"
+  )
+    return "Companion handoff";
+  if (item.leamPurpose === "leam-origin" || item.originator === "leam")
+    return "Created by Leam";
+  return item.source === "cli"
+    ? "Codex CLI"
+    : item.source === "vscode"
+      ? "Codex editor"
+      : "Codex session";
 }

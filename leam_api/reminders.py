@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException
 from pydantic import Field
 
+from .maintenance import work_admission
 from .restore_automation import state as automation_state
 from .commitments import Commitments, Input, Progress, entity
 
@@ -47,7 +48,8 @@ class Scheduler:
     async def run(self):
         while True:
             try:
-                self.tick()
+                with work_admission(self.store):
+                    self.tick()
                 self.last_error = None
             except Exception as error:
                 self.last_error = type(error).__name__

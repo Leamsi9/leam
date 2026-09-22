@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Data } from "./api";
+import { approvalsChanged } from "./approvals-status";
 import { rememberSession, sessionValue } from "./session-cache";
 
 export function CodingHandoffCard({
@@ -76,7 +77,10 @@ export function CodingHandoffCard({
       if (mounted.current) {
         setStatus(value);
         setReview(null);
-        if (value.state === "accepted") open(value);
+        if (value.state === "accepted") {
+          approvalsChanged();
+          open(value);
+        }
       }
     } catch (error) {
       fail(error);
@@ -96,7 +100,8 @@ export function CodingHandoffCard({
       <h3>{item.input.title}</h3>
       <p>{item.reason}</p>
       <p>
-        This starts a dedicated Codex session. Native coding approvals and your
+        Implementation goes to your selected Main when configured; otherwise
+        this starts a dedicated Codex session. Native coding approvals and your
         agent-protocols remain in force.
       </p>
       {!started && item.state === "pending" && (
@@ -116,7 +121,7 @@ export function CodingHandoffCard({
           </label>
           <p>
             This is a suggested draft until you review it. The exact text above
-            is sent unchanged.
+            is included unchanged; a Main handoff adds its source reference.
           </p>
           <details>
             <summary>Quoted Companion context</summary>
@@ -135,16 +140,26 @@ export function CodingHandoffCard({
             </button>
           ) : (
             <section aria-label="Reviewed coding task">
-              <p>Workspace: {review.workspace}</p>
               <p>
-                {review.model} · {review.reasoningEffort} reasoning
+                {review.main
+                  ? `Main: ${review.main.name} · ${review.main.threadId}`
+                  : `Workspace: ${review.workspace}`}
+              </p>
+              <p>
+                {review.main
+                  ? "Main retains its current model and reasoning."
+                  : `${review.model} · ${review.reasoningEffort} reasoning`}
               </p>
               <details>
                 <summary>Validated protocol identity</summary>
                 <code>{review.protocolIdentity}</code>
               </details>
               <button disabled={busy} onClick={() => void start()}>
-                {busy ? "Starting…" : "Start in Coding"}
+                {busy
+                  ? "Starting…"
+                  : review.main
+                    ? "Send to main"
+                    : "Start in Coding"}
               </button>
             </section>
           )}

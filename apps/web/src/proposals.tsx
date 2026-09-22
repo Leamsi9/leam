@@ -1,8 +1,9 @@
+import { useSettingsActive } from "./settings-lifecycle";
 import { useEffect, useRef, useState } from "react";
 import { api, type Data } from "./api";
 import { CodingHandoffCard } from "./coding-handoff";
 
-const names: Record<string, string> = {
+export const proposalNames: Record<string, string> = {
   "commitment.create": "new commitment",
   "commitment.edit": "commitment edit",
   "commitment.progress": "progress update",
@@ -43,7 +44,10 @@ const labels: Record<string, string> = {
 function text(value: unknown) {
   return value === null || value === undefined ? "None" : String(value);
 }
-function Review({ item }: { item: Data }) {
+export function ProposalReview({ item, capacities = [] }: { item: Data; capacities?: Data[] }) {
+  const display = (field: string, value: unknown) => field === "capacityId"
+    ? value ? capacities.find(capacity => capacity.id === value)?.name || "Unavailable capacity" : "Personal"
+    : text(value);
   const r = item.review;
   if (item.operation === "calendar.create")
     return (
@@ -122,8 +126,8 @@ function Review({ item }: { item: Data }) {
           {fields.map((k) => (
             <tr key={k}>
               <th>{labels[k]}</th>
-              {before && <td>{text(before[k])}</td>}
-              <td>{text(after[k])}</td>
+              {before && <td>{display(k, before[k])}</td>}
+              <td>{display(k, after[k])}</td>
             </tr>
           ))}
         </tbody>
@@ -143,6 +147,7 @@ export function ProposalList({
   onChanged?: () => void;
   fail: (e: unknown) => void;
 }) {
+  const panelActive = useSettingsActive();
   const [items, setItems] = useState<Data[]>([]),
     [busy, setBusy] = useState(""),
     [open, setOpen] = useState(false),
@@ -176,23 +181,27 @@ export function ProposalList({
   }
   useEffect(() => {
     mounted.current = true;
+    return () => { mounted.current = false; generation.current++; };
+  }, []);
+  useEffect(() => {
+    if (!panelActive) return;
+    let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       try {
         if (!operating.current) await load();
       } catch (e) {
-        if (mounted.current) fail(e);
+        if (!stopped && mounted.current) fail(e);
       } finally {
-        if (mounted.current) timer = setTimeout(tick, 5000);
+        if (!stopped && mounted.current) timer = setTimeout(tick, 5000);
       }
     };
     tick();
     return () => {
-      mounted.current = false;
-      generation.current++;
+      stopped = true;
       clearTimeout(timer);
     };
-  }, []);
+  }, [panelActive]);
   async function act(item: Data, action: string) {
     if (operating.current) return;
     operating.current = true;
@@ -230,10 +239,10 @@ export function ProposalList({
           <article className="card settings-form" key={item.id}>
             <h3>
               {item.state === "complete" ? "Saved:" : "Suggested:"}{" "}
-              {names[item.operation] || "change"}
+              {proposalNames[item.operation] || "change"}
             </h3>
             <p>{item.reason}</p>
-            <Review item={item} />
+            <ProposalReview item={item} />
             {item.error && <p role="alert">{item.error}</p>}
             {item.state === "pending" && (
               <div className="actions">

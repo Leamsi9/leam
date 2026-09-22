@@ -1,0 +1,19 @@
+.feature-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.feature-card-context {
+  display: grid;
+  gap: 0.5rem;
+  margin-block: 0.75rem;
+}
+.feature-card-context > details > summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding-block: 0.65rem;
+}
+.feature-card-context .composer,
+.feature-card-context textarea {
+  min-width: 0;
+  max-width: 100%;
+}

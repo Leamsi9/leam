@@ -1,5 +1,107 @@
 import { test, expect } from "@playwright/test";
 import { chooseConversation, navigate } from "./navigation";
+
+// These fixtures exercise the deployed browser caller and API request contract.
+// API responses and file bytes are synthetic: archive parsing and model delivery
+// require separate backend and live acceptance evidence.
+const officeFormats = [
+  ["docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  ["xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  ["pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+] as const;
+
+for (const width of [390, 1440])
+  for (const surface of ["coding", "companion"] as const)
+    test(`Office browser fixture uploads with MIME fallback and sends exact IDs in ${surface} at ${width}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 850 });
+      await page.addInitScript(() => {
+        (window as any).EventSource = class extends EventTarget {
+          onopen: any;
+          constructor() {
+            super();
+            setTimeout(() => this.onopen?.(), 0);
+          }
+          close() {}
+        };
+      });
+      const files = officeFormats.flatMap(([extension, mimeType], index) =>
+        ["", "application/octet-stream"].map((browserMime, variant) => ({
+          id: `44444444-4444-4444-8444-${String(index * 2 + variant + 1).padStart(12, "0")}`,
+          filename: `office-${variant}.${variant ? extension.toUpperCase() : extension}`,
+          mimeType,
+          browserMime,
+          sizeBytes: 24,
+          sha256: "d".repeat(64),
+          state: "uploaded",
+        })),
+      );
+      const uploads: string[] = [];
+      const sent: any[] = [];
+      await page.route("**/api/**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const path = url.pathname;
+        let body: any = { items: [], data: [], threads: [], models: [], providers: [] };
+        if (path === "/api/auth/status") body = { authenticated: true };
+        if (path === "/api/codex/threads")
+          body = { data: [{ id: "office", name: "Office browser fixture" }] };
+        if (path === "/api/codex/threads/office")
+          body = { thread: { id: "office" }, connected: true };
+        if (path === "/api/companion/threads")
+          body = { threads: [{ thread_id: "office", title: "Office browser fixture", created_at: "2026-09-21T01:00:00Z" }] };
+        if (path === "/api/companion/threads/office") body = { messages: [] };
+        if (path.includes("/submissions/")) body = { state: "notSubmitted" };
+        if (path === "/api/attachments" && request.method() === "POST") {
+          const filename = url.searchParams.get("filename");
+          const file = files.find((row) => row.filename === filename);
+          expect(file, "upload identifies the selected file").toBeDefined();
+          expect(request.headers()["content-type"]).toBe(file!.mimeType);
+          expect(request.postDataBuffer()?.toString()).toBe(`Browser fixture: ${filename}`);
+          uploads.push(filename!);
+          const { browserMime: _, ...attachment } = file!;
+          body = attachment;
+        }
+        if (
+          request.method() === "POST" &&
+          (path === "/api/codex/threads/office/turns" ||
+            path === "/api/companion/threads/office/messages")
+        ) {
+          sent.push(request.postDataJSON());
+          body = surface === "coding"
+            ? { turn: { id: "office-run", status: "inProgress" } }
+            : { outcome: "deferred_busy", thread_id: "office", accepted_message_ref: "msg:office-fixture", active_run_id: "44444444-4444-4444-8444-444444444444", status: "Running" };
+        }
+        await route.fulfill({ json: body });
+      });
+      await page.goto(`/?view=${surface}`);
+      await chooseConversation(page, "office", surface);
+      const picker = page.getByLabel("Attach files", { exact: true });
+      const accepted = (await picker.getAttribute("accept"))?.split(",");
+      for (const [extension, mime] of officeFormats) {
+        expect(accepted).toContain(`.${extension}`);
+        expect(accepted).toContain(mime);
+      }
+      for (const extension of ["png", "jpg", "jpeg", "webp", "pdf", "txt", "md", "csv", "json"])
+        expect(accepted).toContain(`.${extension}`);
+      await picker.setInputFiles(files.map((file) => ({
+        name: file.filename,
+        mimeType: file.browserMime,
+        buffer: Buffer.from(`Browser fixture: ${file.filename}`),
+      })));
+      for (const file of files)
+        await expect(page.getByLabel("Attached files")).toContainText(file.filename);
+      expect(uploads).toEqual(files.map((file) => file.filename));
+      expect(sent).toHaveLength(0);
+      await page.getByRole("textbox", { name: surface === "coding" ? "Message Codex" : "Message Leam", exact: true }).fill("Inspect these Office files");
+      await page.getByRole("button", { name: surface === "coding" ? "Send message" : "Send to Leam", exact: true }).click();
+      await expect.poll(() => sent.length).toBe(1);
+      expect(sent[0]).toMatchObject({
+        text: "Inspect these Office files",
+        attachmentIds: files.map((file) => file.id),
+      });
+      await expect(page.getByLabel("Attached files")).toHaveCount(0);
+    });
+
 for (const width of [390, 1440])
   test(`Coding uploads privately, restores files across navigation and sends exact input ${width}`, async ({
     page,

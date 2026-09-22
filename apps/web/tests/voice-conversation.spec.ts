@@ -2,7 +2,12 @@ import { chooseConversation } from "./navigation";
 import { test, expect } from "@playwright/test";
 import { navigate, settingsSection } from "./navigation";
 const run = "19e9c46c-a47b-4e01-8cb4-f4c5c4c26c63";
-async function setup(page: any) {
+async function setup(page: any, android = false) {
+  if (android) await page.addInitScript(() => {
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true, value: "Mozilla/5.0 (Linux; Android 16) Chrome/140 Mobile",
+    });
+  });
   await page.addInitScript(() => {
     const w = window as any;
     localStorage.setItem(
@@ -131,6 +136,108 @@ async function start(page: any) {
   await page.getByRole("button", { name: "Conversation", exact: true }).click();
   await expect(page.getByText("Listening…", { exact: true })).toBeVisible();
 }
+
+for (const width of [390, 1440]) test(`active listening remains available through silence and expires once at five minutes (${width}px)`, async ({ page }) => {
+  const f = await setup(page);
+  await page.setViewportSize({ width, height: 844 });
+  const ear = page.getByRole("button", { name: "Active listening (5 minutes)", exact: true });
+  await ear.focus();
+  await page.keyboard.press("Enter");
+  const off = page.getByRole("button", { name: "Stop active listening", exact: true });
+  await expect(off).toHaveAttribute("aria-pressed", "true");
+  const box = await off.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+  await expect(page.getByRole("timer", { name: "Active listening time remaining" })).toContainText("5:00");
+  await page.clock.fastForward(11000);
+  await expect(page.getByText("Microphone on", { exact: false })).toBeVisible();
+  await page.evaluate(() => (window as any).capture.onerror?.({ error: "no-speech" }));
+  await page.clock.fastForward(200);
+  await expect.poll(() => page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  await page.clock.fastForward(287800);
+  await expect(off).toBeVisible();
+  expect(f.sends).toHaveLength(0);
+  await page.clock.fastForward(1100);
+  await expect(off).toHaveCount(0);
+  await expect(page.getByText("Active listening ended after 5 minutes.", { exact: true })).toBeVisible();
+  expect(f.sends).toHaveLength(0);
+});
+
+test("active-listening expiry preserves unsent words and fences late recognition without sending", async ({ page }) => {
+  const f = await setup(page);
+  await page.getByRole("button", { name: "Active listening (5 minutes)", exact: true }).click();
+  await page.clock.fastForward(298000);
+  await page.evaluate(() => (window as any).transcript("Keep this unfinished thought"));
+  await page.clock.fastForward(2100);
+  await expect(page.getByLabel("Message Leam")).toHaveValue("Keep this unfinished thought");
+  await page.evaluate(() => (window as any).transcript("Late result must not send"));
+  await page.clock.fastForward(10000);
+  expect(f.sends).toHaveLength(0);
+  await expect(page.getByLabel("Message Leam")).toHaveValue("Keep this unfinished thought");
+});
+
+test("active listening never submits empty, punctuation-only or provisional recognition", async ({ page }) => {
+  const f = await setup(page);
+  await page.getByRole("button", { name: "Active listening (5 minutes)", exact: true }).click();
+  await page.evaluate(() => (window as any).transcript(""));
+  await page.clock.fastForward(12000);
+  await page.evaluate(() => (window as any).transcript("..."));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  await page.evaluate(() => (window as any).transcript("Unfinished words", false));
+  await page.clock.fastForward(4100);
+  expect(f.sends).toHaveLength(0);
+  await expect(page.getByLabel("Message Leam")).toHaveValue("Unfinished words");
+});
+
+test("active listening keeps its original deadline across reply playback with microphone off", async ({ page }) => {
+  const f = await setup(page);
+  await page.getByRole("button", { name: "Active listening (5 minutes)", exact: true }).click();
+  await page.clock.fastForward(120000);
+  await page.evaluate(() => (window as any).transcript("One spoken request"));
+  await page.clock.fastForward(4100);
+  await expect.poll(() => f.sends.length).toBe(1);
+  f.setMessages([{ message_id: "active-reply", turn_run_id: run, kind: "assistant", status: "finalized", content: "One reply.", sequence: 1 }]);
+  await terminal(page);
+  await expect.poll(() => page.evaluate(() => (window as any).probe.spoken)).toEqual(["One reply."]);
+  await expect(page.getByText("Microphone off", { exact: false })).toBeVisible();
+  await page.clock.fastForward(5000);
+  await page.evaluate(() => { (window as any).probe.audioActive = false; (window as any).utterance.onend?.(); });
+  await expect.poll(() => page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  expect(await page.evaluate(() => (window as any).probe.micDuringOutput)).toBeFalsy();
+  await page.clock.fastForward(171000);
+  await expect(page.getByRole("button", { name: "Stop active listening", exact: true })).toHaveCount(0);
+  expect(f.sends).toHaveLength(1);
+});
+
+test("active listening has explicit off and stops on thread navigation without resuming", async ({ page }) => {
+  const f = await setup(page);
+  await page.getByRole("button", { name: "Active listening (5 minutes)", exact: true }).click();
+  await page.getByRole("button", { name: "Stop active listening", exact: true }).click();
+  await expect(page.getByRole("timer")).toHaveCount(0);
+  await page.getByRole("button", { name: "Active listening (5 minutes)", exact: true }).click();
+  await chooseConversation(page, "b");
+  await expect(page.getByRole("button", { name: "Stop active listening", exact: true })).toHaveCount(0);
+  await page.clock.fastForward(310000);
+  expect(f.sends).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(2);
+});
+
+for (const reason of ["hidden", "logout"]) test(`active listening cancels capture on ${reason} and fences a late result`, async ({ page }) => {
+  const f = await setup(page);
+  await page.getByRole("button", { name: "Active listening (5 minutes)", exact: true }).click();
+  await page.evaluate(reason => {
+    if (reason === "hidden") {
+      Object.defineProperty(document, "hidden", { configurable: true, value: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    } else window.dispatchEvent(new Event("leam:auth-lost"));
+    (window as any).transcript("Late private speech");
+  }, reason);
+  await expect(page.getByRole("button", { name: "Stop active listening", exact: true })).toHaveCount(0);
+  await page.clock.fastForward(310000);
+  expect(f.sends).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).probe.aborts)).toBeGreaterThan(0);
+});
 async function terminal(page: any, id = run) {
   await page.evaluate(
     (id: string) =>
@@ -378,7 +485,7 @@ test("uncertain voice delivery preserves one draft and never retries automatical
   );
   await page.clock.fastForward(30000);
   expect(fixture.sends).toHaveLength(1);
-  await page.getByRole("button", { name: "Send to Leam", exact: true }).click();
+  await page.getByRole("button", { name: "Retry saved message", exact: true }).click();
   await expect.poll(() => fixture.sends.length).toBe(2);
   expect(fixture.sends[1]).toEqual(fixture.sends[0]);
 });
@@ -562,4 +669,82 @@ test("received busy voice follow-up clears its draft and never speaks an unrelat
   await page.clock.fastForward(10000);
   expect(await page.evaluate(() => (window as any).probe.spoken)).toEqual([]);
   expect(fixture.sends).toHaveLength(1);
+});
+
+test("conversation continuous capture retains multiple final segments without microphone restart and dictation stays single utterance", async ({ page }) => {
+  const fixture = await setup(page);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  expect(await page.evaluate(() => (window as any).capture.continuous)).toBe(false);
+  await page.getByRole("button", { name: "Cancel dictation", exact: true }).click();
+  await start(page);
+  expect(await page.evaluate(() => (window as any).capture.continuous)).toBe(true);
+  await page.evaluate(() => {
+    const capture = (window as any).capture;
+    capture.onstart?.(); // duplicate native readiness must not rearm/restart
+    capture.onresult?.({ results: [{ isFinal: true, 0: { transcript: "First thought" } }] });
+  });
+  await page.clock.fastForward(2000);
+  await page.evaluate(() => (window as any).capture.onresult?.({ results: [
+    { isFinal: true, 0: { transcript: "First thought" } },
+    { isFinal: true, 0: { transcript: "and a second thought" } },
+  ] }));
+  await expect(page.getByLabel("Conversation speech")).toContainText("First thought and a second thought");
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  await page.clock.fastForward(4100);
+  await expect.poll(() => fixture.sends.length).toBe(1);
+  expect(fixture.sends[0].text).toBe("First thought and a second thought");
+  await page.getByRole("button", { name: "End conversation", exact: true }).click();
+  expect(fixture.sends).toHaveLength(1);
+});
+
+// Model the Chromium Android bridge: provisional results become final slots in
+// continuous mode, but replace one interim hypothesis in single-utterance mode.
+async function androidHypotheses(page: any, finish = true) {
+  await page.evaluate((finish) => {
+    const capture = (window as any).capture;
+    const hypotheses = ["Please", "Please say", "Please say yes", "Please say yes yes"];
+    const results: any[] = [];
+    for (const text of hypotheses) {
+      const result = { isFinal: !!capture.continuous, 0: { transcript: text } };
+      if (capture.continuous) results.push(result);
+      else results.splice(0, results.length, result);
+      capture.onresult?.({ resultIndex: results.length - 1, results: [...results] });
+    }
+    if (finish) {
+      const result = { isFinal: true, 0: { transcript: hypotheses.at(-1) } };
+      if (capture.continuous) results.push(result);
+      else results.splice(0, results.length, result);
+      capture.onresult?.({ resultIndex: results.length - 1, results: [...results] });
+      capture.onend?.();
+    }
+  }, finish);
+}
+
+for (const active of [false, true]) test(`Android ${active ? "active listening" : "conversation"} replaces growing hypotheses and retains deliberate repeated utterances`, async ({ page }) => {
+  const fixture = await setup(page, true);
+  if (active) await page.getByRole("button", { name: "Active listening (5 minutes)", exact: true }).click();
+  else await start(page);
+  expect(await page.evaluate(() => (window as any).capture.continuous)).toBe(false);
+  await androidHypotheses(page);
+  await expect(page.getByLabel("Conversation speech")).toContainText("Please say yes yes");
+  await page.clock.fastForward(200);
+  expect(await page.evaluate(() => (window as any).probe.starts)).toBe(2);
+  expect(await page.evaluate(() => (window as any).capture.continuous)).toBe(false);
+  // Equal text in a distinct completed capture is a real repeated utterance.
+  await androidHypotheses(page);
+  await page.clock.fastForward(4100);
+  await expect.poll(() => fixture.sends.length).toBe(1);
+  expect(fixture.sends[0].text).toBe("Please say yes yes Please say yes yes");
+});
+
+test("Android dictation replaces provisional revisions and commits intentional repeated words once", async ({ page }) => {
+  const fixture = await setup(page, true);
+  await page.getByLabel("Message Leam").fill("Existing draft");
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  expect(await page.evaluate(() => (window as any).capture.continuous)).toBe(false);
+  await androidHypotheses(page, false);
+  await expect(page.getByLabel("Provisional dictation")).toHaveText("Please say yes yes");
+  await androidHypotheses(page);
+  await expect(page.getByLabel("Message Leam")).toHaveValue("Existing draft Please say yes yes");
+  expect(fixture.sends).toHaveLength(0);
 });

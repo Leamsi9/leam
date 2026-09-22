@@ -1,0 +1,211 @@
+/* Card conversations share the same compact controls and bounded reading space.
+   Touch targets stay 44px; the response gets all remaining space, rather than a
+   fixed percentage that would hide controls with a keyboard or short viewport. */
+.contextual-chat {
+  min-width: 0;
+  width: 100%;
+}
+.contextual-chat > summary {
+  cursor: pointer;
+  padding-block: 10px;
+}
+.contextual-chat .contextual-chat-body {
+  min-width: 0;
+  container-type: inline-size;
+}
+.contextual-chat .ticket-conversation,
+.contextual-chat.item-chat .companion-page.has-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  height: min(78dvh, 720px);
+  min-height: 0;
+  padding: 4px 0;
+  margin: 0;
+  overflow: hidden;
+}
+.contextual-chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.contextual-chat-label {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--sub);
+}
+.contextual-chat-toolbar > button {
+  flex: 0 0 44px;
+}
+.contextual-chat .contextual-chat-messages,
+.contextual-chat.item-chat .companion-messages {
+  flex: 1 1 0;
+  min-height: 64px;
+  max-height: none;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  padding: 8px;
+}
+.contextual-chat-transcript {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.contextual-chat-transcript > * {
+  flex-shrink: 0;
+}
+.contextual-chat .ticket-conversation > :is(p, [role="alert"]) {
+  margin: 0;
+  padding: 4px;
+  font-size: 12px;
+  flex: 0 0 auto;
+  max-height: 20dvh;
+  overflow: auto;
+}
+.contextual-chat
+  .ticket-conversation
+  > div:not(.contextual-chat-toolbar):not(.contextual-chat-messages) {
+  flex-shrink: 0;
+  max-height: 25dvh;
+  overflow: auto;
+}
+.contextual-chat:is(.item-chat, .ticket-chat) .contextual-chat-body .composer,
+.contextual-chat.item-chat .companion-page .composer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  position: static;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px;
+  gap: 4px;
+  width: 100%;
+  max-height: min(38dvh, 260px);
+  min-width: 0;
+  overflow: auto;
+}
+.contextual-chat:is(.item-chat, .ticket-chat)
+  .contextual-chat-body
+  .composer
+  > textarea {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  width: 100%;
+  min-height: 40px;
+  height: 40px;
+  resize: vertical;
+  font-size: 16px;
+}
+.contextual-chat:is(.item-chat, .ticket-chat)
+  .contextual-chat-body
+  .composer
+  > .attachment-composer {
+  grid-column: 1 !important;
+  grid-row: 2;
+}
+.contextual-chat:is(.item-chat, .ticket-chat)
+  .contextual-chat-body
+  .composer
+  > .voice-composer {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+}
+.contextual-chat:is(.item-chat, .ticket-chat)
+  .contextual-chat-body
+  .composer
+  > .send {
+  grid-column: 3;
+  grid-row: 2;
+  width: 44px;
+  height: 44px;
+}
+.contextual-chat:is(.item-chat, .ticket-chat)
+  .contextual-chat-body
+  .composer
+  > .attachment-composer:has(ul, [role="alert"]) {
+  grid-column: 1 / -1 !important;
+  grid-row: 3;
+}
+.contextual-chat:is(.item-chat, .ticket-chat)
+  .contextual-chat-body
+  .composer
+  .attachment-composer
+  > label {
+  padding: 8px !important;
+  min-width: 44px;
+  justify-content: center;
+}
+.contextual-chat .voice-status-row {
+  gap: 4px;
+  margin: 0;
+  justify-content: flex-start;
+}
+@media (max-height: 500px) {
+  .contextual-chat .ticket-conversation,
+  .contextual-chat.item-chat .companion-page.has-conversation {
+    height: calc(100dvh - 52px);
+  }
+  .contextual-chat:is(.item-chat, .ticket-chat)
+    .contextual-chat-body
+    .composer {
+    max-height: 44dvh;
+  }
+}
+/* Use the actual card width: viewport-wide landscape rules can overflow narrow
+   board columns. Wide cards can put the draft and buttons on a single row. */
+@container (min-width: 680px) {
+  @media (max-height: 500px) {
+    .contextual-chat:is(.item-chat, .ticket-chat)
+      .contextual-chat-body
+      .composer {
+      grid-template-columns: minmax(120px, 1fr) auto auto auto;
+      align-items: center;
+    }
+    .contextual-chat:is(.item-chat, .ticket-chat)
+      .contextual-chat-body
+      .composer
+      > textarea {
+      grid-column: 1;
+      grid-row: 1;
+      height: 44px;
+    }
+    .contextual-chat:is(.item-chat, .ticket-chat)
+      .contextual-chat-body
+      .composer
+      > .attachment-composer {
+      grid-column: 2 !important;
+      grid-row: 1;
+    }
+    .contextual-chat:is(.item-chat, .ticket-chat)
+      .contextual-chat-body
+      .composer
+      > .voice-composer {
+      grid-column: 3;
+      grid-row: 1;
+    }
+    .contextual-chat:is(.item-chat, .ticket-chat)
+      .contextual-chat-body
+      .composer
+      > .send {
+      grid-column: 4;
+      grid-row: 1;
+    }
+  }
+}
+
+/* Before any exchange, the composer follows the header without reserving a
+   transcript viewport. First send/pending receipt/history restores full height. */
+.contextual-chat .ticket-conversation[data-has-exchanges="false"],
+.contextual-chat.item-chat .companion-page.has-conversation[data-has-exchanges="false"] {
+  height: auto;
+  min-height: 0;
+}
+.contextual-chat .ticket-conversation[data-has-exchanges="false"] .contextual-chat-messages,
+.contextual-chat.item-chat .companion-page[data-has-exchanges="false"] .companion-messages {
+  display: none;
+}

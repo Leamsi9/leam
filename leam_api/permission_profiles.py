@@ -80,7 +80,7 @@ class PermissionProfiles:
         result["hostCeiling"] = (await self.inspector.tools())["data"]["hostCeiling"]
         result["history"] = self.records()
         result["modeExplanation"] = (
-            "Global automatic approval will be off; the 14 selected domain tools receive explicit Allow. Proposal execution follows its separate domain approval policy."
+            "Global automatic approval will be off; reviewed selected tools receive explicit Allow. Proposal execution follows its separate domain approval policy."
         )
         return result
 

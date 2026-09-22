@@ -1,0 +1,24 @@
+import {test,expect} from "@playwright/test";
+test.use({channel:"chromium"});
+for(const width of [390,844])test(`real service-worker push shows one dismissible foreground popup at ${width}`,async({page,context})=>{
+ await page.setViewportSize({width,height:width===390?844:390});
+ await context.grantPermissions(["notifications"]);
+ await page.addInitScript(()=>{(window as any).EventSource=class extends EventTarget{close(){}};});
+ await page.route("**/api/**",route=>route.fulfill({json:new URL(route.request().url()).pathname==="/api/auth/status"?{authenticated:true}:{items:[],data:[],providers:[],threads:[],messages:[]}}));
+ const cdp=await context.newCDPSession(page);let registrationId="";let origin="";
+ cdp.on("ServiceWorker.workerRegistrationUpdated",({registrations})=>{registrationId=registrations.find(r=>r.scopeURL===origin+"/")?.registrationId||registrationId;});
+ await page.goto("/?view=settings");origin=new URL(page.url()).origin;
+ await page.evaluate(async()=>{await navigator.serviceWorker.ready;});await cdp.send("ServiceWorker.enable");await expect.poll(()=>registrationId).not.toBe("");
+ const send=async(tag:string)=>cdp.send("ServiceWorker.deliverPushMessage",{origin,registrationId,data:JSON.stringify({tag,body:"A private synthetic reminder",url:"https://untrusted.example"})});
+ const popup=page.getByRole("complementary",{name:"Leam notification"});
+ await expect(popup).toHaveCount(0);
+ await page.evaluate(()=>navigator.serviceWorker.dispatchEvent(new MessageEvent("message",{data:{type:"leam:push-notice",tag:"forged",body:"Forged"}})));
+ await expect(popup).toHaveCount(0);
+ await send("popup-one");await expect(popup).toBeVisible();await expect(popup.getByRole("status")).toContainText("A private synthetic reminder");await expect(popup.getByRole("link",{name:"Open Today"})).toHaveAttribute("href","/?view=today");
+ await expect.poll(()=>page.evaluate(async()=> (await (await navigator.serviceWorker.ready).getNotifications({tag:"popup-one"})).length)).toBe(1);
+ await popup.getByRole("button",{name:"Dismiss notification popup"}).click();await send("popup-one");await expect(popup).toHaveCount(0);
+ await send("popup-two");await expect(popup).toBeVisible();await expect(page.locator(".notification-popup")).toHaveCount(1);
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await popup.getByRole("link",{name:"Open Today"}).click();await expect(page).toHaveURL(/\?view=today$/);
+ await page.evaluate(async()=>{for(const n of await (await navigator.serviceWorker.ready).getNotifications())n.close();});
+});

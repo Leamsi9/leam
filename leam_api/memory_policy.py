@@ -43,9 +43,11 @@ def update(store, value):
         return result.model_dump()
 
 
-def decision(db, operation):
+def decision(db, operation, *, origin=None):
     if not operation.startswith("memory."):
-        return {"mode": "manual"}
+        from . import approval_policy
+
+        return approval_policy.decision(db, operation, origin)
     policy = read(db)
     required = getattr(policy, operation.split(".")[1] + "RequiresApproval")
     return {

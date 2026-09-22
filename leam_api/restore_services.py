@@ -17,9 +17,10 @@ CEILING_VARIABLE = b"IRONCLAW_REBORN_ALLOWED_CAPABILITY_IDS="
 
 
 class FixedRestoreServices:
-    def __init__(self, deployment, control=None):
+    def __init__(self, deployment, control=None, *, drain=None):
         self.deployment = deployment
         self.control = control or ServiceControl()
+        self.drain = drain
 
     async def identity(self):
         unit = SERVICES["runtime"][1]
@@ -81,7 +82,13 @@ class FixedRestoreServices:
             "ceilingSha256": ceiling,
         }
 
+    async def ensure_drained(self):
+        from .maintenance import DrainControl
+
+        await (self.drain or DrainControl(self.deployment, self.control)).require()
+
     async def stop(self):
+        await self.ensure_drained()
         await self.control._systemctl(
             "stop", *(SERVICES[name][1] for name in ("app", "mcp", "runtime"))
         )
@@ -154,8 +161,9 @@ class FixedRestoreServices:
                     trust_env=False, timeout=3, follow_redirects=False
                 ) as client:
                     response = await client.get("http://127.0.0.1:46400/api/health")
-                    if response.status_code != 200 or not response.json().get(
-                        "operational"
+                    if (
+                        response.status_code != 200
+                        or response.json().get("status") != "operational"
                     ):
                         raise ValueError("Candidate API is not operational")
                 data = Path(value["dataDirectory"])

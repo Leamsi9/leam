@@ -194,6 +194,9 @@ def test_coding_native_rename_pagination_and_shared_protection(tmp_path):
                 "limit": 3,
                 "cursor": "next /&+",
                 "sourceKinds": ["cli", "vscode", "appServer"],
+                "sortKey": "recency_at",
+                "sortDirection": "desc",
+                "archived": False,
             },
         )
         assert all(item["id"] != SHARED_THREAD for item in r.json()["data"])

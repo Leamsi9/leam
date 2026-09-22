@@ -1,3 +1,4 @@
+import { LinkedResources, ResourceTarget } from "./resource-links";
 import { useEffect, useRef, useState } from "react";
 import { Plus, Sun } from "lucide-react";
 import { api, type Data } from "./api";
@@ -187,10 +188,10 @@ export function Goals({ fail }: Props) {
           <p>Add a commitment or choose another date.</p>
         </div>
       )}
-      <details className="card">
+      <details className="card" open={new URLSearchParams(location.search).has("commitment") ? true : undefined}>
         <summary>All commitments · {all.length}</summary>
         {all.map((i) => (
-          <div key={i.id}>
+          <ResourceTarget key={i.id} type="commitment" id={i.id}>
             <div className="manage-row">
               <span>
                 {i.title} · {i.status}
@@ -206,6 +207,7 @@ export function Goals({ fail }: Props) {
                 Remove
               </button>
             </div>
+            <LinkedResources targetType="commitment" targetId={i.id} />
             {!shown.some((item) => item.id === i.id) && (
               <ItemChat
                 kind="commitment"
@@ -214,7 +216,7 @@ export function Goals({ fail }: Props) {
                 changed={load}
               />
             )}
-          </div>
+          </ResourceTarget>
         ))}
       </details>
       {(adding || editing) && (

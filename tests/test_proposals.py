@@ -97,7 +97,9 @@ def test_proposal_receipt_failure_rolls_back_domain_effect(tmp_path, monkeypatch
         service = app.state.proposals
         original = service.record
 
-        def broken(*args):
+        def broken(db, key, result, *, mark_read=False):
+            assert db is not None and key == proposal.json()["id"]
+            assert result and mark_read is True
             raise RuntimeError("simulated receipt failure")
 
         monkeypatch.setattr(service, "record", broken)

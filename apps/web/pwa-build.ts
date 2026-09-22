@@ -26,8 +26,10 @@ export function pwaShell(): Plugin {
         "/leam-maskable-512.png",
         "/apple-touch-icon.png",
         "/favicon-32.png",
+        "/leam-notification-badge.svg",
         "/favicon.ico",
         "/manifest.webmanifest",
+        "/theme-init.js",
         ...Object.keys(bundle)
           .filter(
             (name) => name.startsWith("assets/") && /\.(js|css)$/.test(name),

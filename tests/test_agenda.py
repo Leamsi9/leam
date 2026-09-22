@@ -37,7 +37,29 @@ def application(tmp_path, *, fail_first_create=False, delete_status=200):
         if request.method == "DELETE" and "/threads/" in request.url.path:
             return httpx.Response(delete_status, json={"deleted": True})
         if request.url.path.endswith("/session"):
-            return httpx.Response(200, json={"session_channel_extension_id": "web"})
+            return httpx.Response(
+                200,
+                json={
+                    "session_channel_extension_id": "web",
+                    "tenant_id": "fixture-tenant",
+                    "user_id": "fixture-user",
+                },
+            )
+        if request.url.path.endswith("/timeline"):
+            thread_id = request.url.path.split("/")[-2]
+            return httpx.Response(
+                200,
+                json={
+                    "thread": {
+                        "thread_id": thread_id,
+                        "scope": {
+                            "tenant_id": "fixture-tenant",
+                            "owner_user_id": "fixture-user",
+                        },
+                    },
+                    "messages": [],
+                },
+            )
         if request.url.path.endswith("/messages"):
             calls.append(body)
             return httpx.Response(

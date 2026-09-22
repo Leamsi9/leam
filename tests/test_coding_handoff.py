@@ -81,6 +81,8 @@ def test_review_start_is_explicit_exact_and_linked(tmp_path, monkeypatch):
         assert started.status_code == 200, started.text
         saved = started.json()
         assert saved["threadId"] == "ticket-thread"
+        assert c.get("/api/proposals/status").json()["unreadCount"] == 0
+        assert app.state.proposals.get(key)["unread"] is False
         turn = next(params for m, params in bridge.calls if m == "turn/start")
         assert turn["input"][0]["text"] == raw
         assert "leam.agent-protocols" in turn["additionalContext"]
@@ -163,6 +165,7 @@ def test_changed_review_digest_and_creation_uncertainty_cannot_dispatch(
         assert c.post(path + "/start", headers=H, json=body).status_code == 409
         assert len([m for m, _ in bridge.calls if m == "thread/start"]) == 1
         assert not any(m == "turn/start" for m, _ in bridge.calls)
+        assert c.get("/api/proposals/status").json()["unreadCount"] == 1
 
 
 def test_restart_and_persisted_result_survive_event_window(tmp_path, monkeypatch):
@@ -377,3 +380,42 @@ def test_protocol_damage_or_original_owner_identity_never_dispatches(
         monkeypatch.setattr(handoff_module, "coding_context", original)
         assert c.post(path, headers=H, json=body).json()["state"] == "uncertain"
         assert not any(m == "turn/start" for m, _ in bridge.calls)
+
+
+def test_decline_during_handoff_review_returns_conflict_without_dispatch(tmp_path, monkeypatch):
+    app, bridge = setup(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        login(client)
+        item = propose(client)
+        handoffs = app.state.coding_handoffs
+        original = handoffs.configuration
+
+        async def configuration_after_decline():
+            result = await original()
+            await handoffs.proposals.decline(item['id'])
+            return result
+
+        monkeypatch.setattr(handoffs, 'configuration', configuration_after_decline)
+        response = client.post(f"/api/coding/handoffs/{item['id']}/review", headers=H, json={'text': 'Review this task'})
+        assert response.status_code == 409
+        assert not any(method in {'thread/start', 'turn/start'} for method, _ in bridge.calls)
+
+
+def test_decline_during_handoff_start_returns_conflict_without_dispatch(tmp_path, monkeypatch):
+    app, bridge = setup(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        login(client)
+        item = propose(client)
+        ready = review(client, item['id'], 'Implement this exact task')
+        handoffs = app.state.coding_handoffs
+        original = handoffs.configuration
+
+        async def configuration_after_decline():
+            result = await original()
+            await handoffs.proposals.decline(item['id'])
+            return result
+
+        monkeypatch.setattr(handoffs, 'configuration', configuration_after_decline)
+        response = client.post(f"/api/coding/handoffs/{item['id']}/start", headers=H, json={'previewToken': ready['previewToken'], 'confirmed': True})
+        assert response.status_code == 409
+        assert not any(method in {'thread/start', 'turn/start'} for method, _ in bridge.calls)

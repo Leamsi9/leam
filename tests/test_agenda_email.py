@@ -10,7 +10,9 @@ from test_api import login
 from leam_api.accounts import EMAIL_SCOPE
 
 
-def seed_mail(app, count=1, *, granted=True, title="Mailbox subject", synced=None):
+def seed_mail(
+    app, count=1, *, granted=True, title="Mailbox subject", synced=None, classified=True
+):
     now = time.time() if synced is None else synced
     vault, store = app.state.accounts.vault, app.state.store
     store.set(
@@ -78,6 +80,20 @@ def seed_mail(app, count=1, *, granted=True, title="Mailbox subject", synced=Non
                 now,
             ),
         )
+    if classified and granted:
+        for item in items:
+            app.state.emails.classifier.persist(
+                item,
+                "fixture-grant",
+                {
+                    "state": "action",
+                    "kind": "todo",
+                    "basis": "explicit",
+                    "reason": "Fixture obligation",
+                    "action": "Fixture task",
+                    "evidence": "PRIVATE SNIPPET",
+                },
+            )
     return items
 
 
@@ -128,7 +144,7 @@ def test_agenda_uses_cached_mail_exact_keys_and_local_scoped_triage(tmp_path):
     assert not provider_calls and not runtime_calls
 
 
-def test_mail_capped_twenty_and_missing_grant_never_becomes_empty_connected_inbox(
+def test_mail_overview_and_missing_grant_never_become_empty_connected_inbox(
     tmp_path,
 ):
     app, _, _ = application(tmp_path)
@@ -170,6 +186,28 @@ def test_mail_capped_twenty_and_missing_grant_never_becomes_empty_connected_inbo
             == 404
         )
     assert not provider_calls
+
+
+def test_action_cap_is_applied_after_non_actions_are_filtered(tmp_path):
+    app, _, _ = application(tmp_path)
+    items = seed_mail(app, 25)
+    for item in items[:5]:
+        app.state.emails.classifier.persist(
+            item,
+            "fixture-grant",
+            {
+                "state": "ignore",
+                "kind": None,
+                "basis": None,
+                "reason": "Excluded fixture",
+                "action": "",
+                "evidence": "",
+            },
+        )
+    with TestClient(app) as client:
+        login(client)
+        data = client.get("/api/agenda", params=DAY).json()
+        assert len(data["emails"]) == data["total"]["emails"] == 20
 
 
 def test_email_triage_rechecks_membership_at_write_boundary(tmp_path, monkeypatch):
@@ -260,6 +298,27 @@ def test_daily_companion_uses_same_live_cache_with_bounded_reference_and_exact_r
         assert (
             client.post(path, headers=H, json=message).status_code == 200
             and len(calls) == 1
+        )
+        assert (
+            client.post(
+                path, headers=H, json={**message, "requestId": str(uuid.uuid4())}
+            ).status_code
+            == 200
+        )
+        assert (
+            "Updated inbox subject" not in calls[-1]["model_context"]["reference_text"]
+        )
+        app.state.emails.classifier.persist(
+            items[0],
+            "fixture-grant",
+            {
+                "state": "action",
+                "kind": "todo",
+                "basis": "explicit",
+                "reason": "Updated source obligation",
+                "action": "Fixture task",
+                "evidence": "PRIVATE SNIPPET",
+            },
         )
         assert (
             client.post(

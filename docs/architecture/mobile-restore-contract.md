@@ -31,7 +31,7 @@ one pointer, sets active LEAM_DATA_DIR/PYTHONPATH, fixed loopback ports/factory 
 and current generation TLS paths, and drops stale LEAM_* overrides inherited from the
 unit. All intended LEAM_ORIGINS/runtime/IDE socket/install/API overrides must first
 be included in the descriptor's strict environment allowlist. OS environment is
-otherwise preserved. The installation operator owns adoption/restart validation; source code never edits
+otherwise preserved. Root owns this adoption/restart test; source code never edits
 units or the live descriptor automatically.
 
 Normal deployment MUST participate in the same `candidate-operation.lock` for its
@@ -50,7 +50,7 @@ with deployment.lock():
 `prepare_release_locked` refuses unfinished restore journals. `replace_locked`
 requires this object's held cross-process lock and the exact prior descriptor digest;
 normal deployment cannot race a restore or silently keep an old release pointer.
-The operator updates reviewed runtime metadata when activating a new runtime/host ceiling.
+Root updates reviewed runtime metadata when activating a new runtime/host ceiling.
 Existing app release does not dictate recovery's own release. Mobile restore is
 restricted to the compatible current active application release and installation.
 
@@ -68,7 +68,7 @@ Archives made before email caching may omit `email_snapshots`; ordinary Store
 initialization creates the empty table on restored application startup. A present
 table must match the current exact schema. Each saved snapshot must decrypt with
 the installation account key and its `email-snapshot:<account ID>` label, and its
-cache envelope must contain at most 20 object items plus a boolean truncation flag.
+cache envelope must contain a boolean truncation flag and at most its declared 20 (ordinary sync) or 100 (explicit rebuild) object items. Older envelopes without a limit retain the 20-item bound. Refill-generation metadata is retained. Independently pinned Recovery must include this validator before restoring expanded snapshots; older20-item readers reject them without mutating either generation.
 Additional snapshot/item metadata is preserved. Missing email cache never grants
 mailbox access or changes restored calendar/mail credentials. All other required
 tables and account/config vault checks remain enforced.
@@ -102,7 +102,7 @@ Source isolated gates verify actual SQLite/vault restore+rollback, preexisting d
 preservation, launcher call arguments/environment, key identity mismatch, stale
 preview/runtime drift, overlapping operation/deployment locks, crash uncertainty,
 stop/health failure and cancellation while a filesystem worker is still active.
-Deployment adoption, installed restore/rollback validation and user UAT are separate from source-level verification.
+Deployment adoption, real candidate restore/rollback and user UAT are parent-owned.
 
 ## Automation restart fence and adoption dependency
 
@@ -114,7 +114,7 @@ rollback generation: older cursors can otherwise repeat notifications delivered 
 using another generation. Domain entities are not discarded.
 
 **Do not adopt this launcher/controller without the coordinated worker consumer.**
-The coordinated worker consumer must fail closed on a held/malformed marker in push,
+The parent-owned consumer must fail closed on a held/malformed marker in push,
 reminder and routine workers and their manual tick/run-now callers. Explicit owner
 Settings review/confirmation resumes future work only: account for skipped pending
 push and past-due reminder work, advance routine cursors past confirmed resume cutoff,
@@ -208,3 +208,25 @@ client and assumes its systemd job stopped: the lock stays held until the manage
 client finishes, then the timeout is reported. A stuck manager requires operator
 intervention; availability is not restored by allowing overlapping operations.
 Hard process death still requires journal and actual service-state reconciliation.
+
+## Admission prerequisite
+
+Restore/rollback and coordinated release switching now require the independent
+maintenance barrier described in `recovery-contract.md`. Prepare maintenance in
+Recovery and inspect the accepted-work proof before confirming a restore. The
+controller rechecks admission before reserving a new journal and again immediately
+before stopping writers. Keep the barrier held during operator state comparison
+and rollback so no concurrent user write is discarded by the drill. Explicitly end
+maintenance to resume main-app access; restored automation remains separately held
+until Settings future-only review. Health acceptance uses the actual main API
+`status: "operational"` contract plus existing PID/data/client/MCP bindings.
+
+Product backup payloads are bounded at1GiB in total (plus a64KiB manifest and1MiB
+archive overhead). Format version1 remains unchanged and prior smaller archives
+remain compatible. Export, extraction and mobile preview/restore use1MiB chunks;
+preview's SHA256 binds the stable private archive file used for restoration, not a
+whole-file in-memory buffer. Declared and actual expanded-byte limits both apply.
+Independent Recovery must run the updated validator for archives above its former
+256MiB limit; app deployment alone does not upgrade Recovery. Attachment upload
+quotas remain separate. Backup storage still needs sufficient disk space for the
+SQLite snapshot, archive, verification and fresh safety backup; no pruning occurs.

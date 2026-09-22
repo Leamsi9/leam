@@ -37,6 +37,8 @@ async def api_owner(
     drop=False,
     interrupt_result="fixture-turn",
     requests=None,
+    runtime_status=None,
+    settings_applied=True,
 ):
     monkeypatch.setattr("leam_api.shared_session.validate_installation", lambda _: None)
     observed = []
@@ -73,6 +75,10 @@ async def api_owner(
             }
         ],
     }
+
+    if runtime_status is not None:
+        state["threadRuntimeStatus"] = runtime_status
+        state["resumeState"] = "resumed"
 
     if requests is not None:
         state["requests"] = requests
@@ -120,7 +126,9 @@ async def api_owner(
                     if drop:
                         break
                     result = (
-                        {"ok": True, "interruptedTurnId": interrupt_result}
+                        {"applied": settings_applied}
+                        if method == "thread-follower-update-thread-settings"
+                        else {"ok": True, "interruptedTurnId": interrupt_result}
                         if method == "thread-follower-interrupt-turn"
                         else (
                             {"ok": True}

@@ -1,3 +1,4 @@
+from test_maintenance import AllowedDrain
 import asyncio
 import json
 import shutil
@@ -225,7 +226,7 @@ def test_fixed_release_services_preserve_runtime_and_recovery(tmp_path, leftover
                 ]
 
         control = Control()
-        services = ReleaseServices(deployment, control)
+        services = ReleaseServices(deployment, control, drain=AllowedDrain())
         if leftover:
             with pytest.raises(ValueError, match="listener remains"):
                 await services.stop()

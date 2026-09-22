@@ -13,7 +13,7 @@ const labels: Record<string, string> = {
 function when(value: number | null) {
   return value ? new Date(value * 1000).toLocaleString() : "No saved timestamp";
 }
-export function ContextOverview() {
+export function ContextOverview({ initiallyOpen = false }: { initiallyOpen?: boolean }) {
   const [open, setOpen] = useState(false),
     [data, setData] = useState<Data | null>(null),
     [error, setError] = useState(""),
@@ -44,7 +44,8 @@ export function ContextOverview() {
   const project = data?.project;
   return (
     <details
-      className="card context-overview"
+      className="card context-overview settings-section"
+      open={initiallyOpen ? true : undefined}
       onToggle={(e) => {
         const next = e.currentTarget.open;
         setOpen(next);
